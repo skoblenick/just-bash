@@ -1,4 +1,4 @@
-import { VirtualFs } from './fs.js';
+import { VirtualFs, IFileSystem } from './fs.js';
 import { Command, CommandContext, CommandRegistry, ExecResult } from './types.js';
 
 // Import commands
@@ -17,20 +17,37 @@ import { wcCommand } from './commands/wc/wc.js';
 import { grepCommand } from './commands/grep/grep.js';
 
 export interface BashEnvOptions {
+  /**
+   * Initial files to populate the virtual filesystem.
+   * Only used when fs is not provided.
+   */
   files?: Record<string, string>;
+  /**
+   * Environment variables
+   */
   env?: Record<string, string>;
+  /**
+   * Initial working directory
+   */
   cwd?: string;
+  /**
+   * Custom filesystem implementation.
+   * If provided, 'files' option is ignored.
+   * Defaults to VirtualFs if not provided.
+   */
+  fs?: IFileSystem;
 }
 
 export class BashEnv {
-  private fs: VirtualFs;
+  private fs: IFileSystem;
   private cwd: string;
   private env: Record<string, string>;
   private commands: CommandRegistry = new Map();
   private previousDir: string = '/';
 
   constructor(options: BashEnvOptions = {}) {
-    this.fs = new VirtualFs(options.files);
+    // Use provided filesystem or create a new VirtualFs
+    this.fs = options.fs ?? new VirtualFs(options.files);
     this.cwd = options.cwd || '/';
     this.env = { HOME: '/', PATH: '/bin', ...options.env };
 
@@ -264,11 +281,8 @@ export class BashEnv {
   }
 
   private async executeSimpleCommand(commandLine: string, stdin: string): Promise<ExecResult> {
-    // Expand variables
-    const expanded = this.expandVariables(commandLine);
-
-    // Parse command and arguments
-    const { command, args } = this.parseCommand(expanded);
+    // Parse command and arguments (variable expansion happens inside parseCommand)
+    const { command, args } = this.parseCommand(commandLine);
 
     if (!command) {
       return { stdout: '', stderr: '', exitCode: 0 };
@@ -374,6 +388,14 @@ export class BashEnv {
         continue;
       }
 
+      // Handle variable expansion (not in single quotes)
+      if (char === '$' && inQuote !== "'") {
+        const expanded = this.parseAndExpandVariable(commandLine, i);
+        current += expanded.value;
+        i = expanded.endIndex;
+        continue;
+      }
+
       // Handle quotes
       if ((char === '"' || char === "'")) {
         if (inQuote === char) {
@@ -407,6 +429,55 @@ export class BashEnv {
 
     const [command, ...args] = tokens;
     return { command: command || '', args };
+  }
+
+  private parseAndExpandVariable(str: string, startIndex: number): { value: string; endIndex: number } {
+    let i = startIndex + 1; // Skip the $
+
+    if (i >= str.length) {
+      return { value: '$', endIndex: i };
+    }
+
+    // Handle ${VAR} and ${VAR:-default}
+    if (str[i] === '{') {
+      const closeIndex = str.indexOf('}', i);
+      if (closeIndex === -1) {
+        return { value: '${', endIndex: i + 1 };
+      }
+      const content = str.slice(i + 1, closeIndex);
+      // Handle ${VAR:-default}
+      const defaultMatch = content.match(/^([^:]+):-(.*)$/);
+      if (defaultMatch) {
+        const [, varName, defaultValue] = defaultMatch;
+        return {
+          value: this.env[varName] ?? defaultValue,
+          endIndex: closeIndex + 1,
+        };
+      }
+      return {
+        value: this.env[content] ?? '',
+        endIndex: closeIndex + 1,
+      };
+    }
+
+    // Handle $VAR
+    let varName = '';
+    while (i < str.length && /[A-Za-z0-9_]/.test(str[i])) {
+      if (varName === '' && /[0-9]/.test(str[i])) {
+        break; // Variable names can't start with digit
+      }
+      varName += str[i];
+      i++;
+    }
+
+    if (!varName) {
+      return { value: '$', endIndex: startIndex + 1 };
+    }
+
+    return {
+      value: this.env[varName] ?? '',
+      endIndex: i,
+    };
   }
 
   private async handleCd(args: string[]): Promise<ExecResult> {

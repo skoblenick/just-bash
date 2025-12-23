@@ -1,21 +1,22 @@
-export interface FileEntry {
-  type: 'file';
-  content: string;
-  mode: number;
-}
+import {
+  IFileSystem,
+  FsEntry,
+  FileEntry,
+  DirectoryEntry,
+  FsStat,
+  MkdirOptions,
+  RmOptions,
+  CpOptions,
+} from './fs-interface.js';
 
-export interface DirectoryEntry {
-  type: 'directory';
-  mode: number;
-}
-
-export type FsEntry = FileEntry | DirectoryEntry;
+// Re-export for backwards compatibility
+export type { FileEntry, DirectoryEntry, FsEntry, FsStat, IFileSystem };
 
 export interface FsData {
   [path: string]: FsEntry;
 }
 
-export class VirtualFs {
+export class VirtualFs implements IFileSystem {
   private data: Map<string, FsEntry> = new Map();
 
   constructor(initialFiles?: Record<string, string>) {
@@ -123,7 +124,7 @@ export class VirtualFs {
     return this.data.has(this.normalizePath(path));
   }
 
-  async stat(path: string): Promise<{ isFile: boolean; isDirectory: boolean; mode: number }> {
+  async stat(path: string): Promise<FsStat> {
     const normalized = this.normalizePath(path);
     const entry = this.data.get(normalized);
 
@@ -138,7 +139,7 @@ export class VirtualFs {
     };
   }
 
-  async mkdir(path: string, options?: { recursive?: boolean }): Promise<void> {
+  async mkdir(path: string, options?: MkdirOptions): Promise<void> {
     const normalized = this.normalizePath(path);
 
     if (this.data.has(normalized)) {
@@ -146,7 +147,11 @@ export class VirtualFs {
       if (entry?.type === 'file') {
         throw new Error(`EEXIST: file already exists, mkdir '${path}'`);
       }
-      return; // Directory already exists
+      // Directory already exists
+      if (!options?.recursive) {
+        throw new Error(`EEXIST: directory already exists, mkdir '${path}'`);
+      }
+      return; // With -p, silently succeed if directory exists
     }
 
     const parent = this.dirname(normalized);
@@ -189,7 +194,7 @@ export class VirtualFs {
     return entries.sort();
   }
 
-  async rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void> {
+  async rm(path: string, options?: RmOptions): Promise<void> {
     const normalized = this.normalizePath(path);
     const entry = this.data.get(normalized);
 
@@ -214,7 +219,7 @@ export class VirtualFs {
     this.data.delete(normalized);
   }
 
-  async cp(src: string, dest: string, options?: { recursive?: boolean }): Promise<void> {
+  async cp(src: string, dest: string, options?: CpOptions): Promise<void> {
     const srcNorm = this.normalizePath(src);
     const destNorm = this.normalizePath(dest);
     const srcEntry = this.data.get(srcNorm);

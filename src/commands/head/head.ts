@@ -33,10 +33,16 @@ export const headCommand: Command = {
 
     // If no files, read from stdin
     if (files.length === 0) {
-      const inputLines = ctx.stdin.split('\n');
-      const output = inputLines.slice(0, lines).join('\n');
+      let inputLines = ctx.stdin.split('\n');
+      // Remove trailing empty line from split if input ended with newline
+      const hadTrailingNewline = ctx.stdin.endsWith('\n');
+      if (hadTrailingNewline && inputLines.length > 0 && inputLines[inputLines.length - 1] === '') {
+        inputLines = inputLines.slice(0, -1);
+      }
+      const selected = inputLines.slice(0, lines);
+      const output = selected.join('\n');
       return {
-        stdout: output + (output && !output.endsWith('\n') ? '' : ''),
+        stdout: output + (output ? '\n' : ''),
         stderr: '',
         exitCode: 0,
       };

@@ -26,3 +26,9 @@ Build a class BashEnv that represents a fully simulated bash environment, but wi
 - Make a dedicated test file for bash syntax like logical or, etc.
 - I really care about grep. Lets ensure it works incredibly well
 - Imagine you are an AI agent that has a bash tool and a filesystem. Write a set of scenarios into ./agent-examples/$scenario.md of files that might exist and bash commands you'd want to run to explore these files.
+
+## Implementation phase 3
+
+- Separate FS and VirtualFS into an abstraction that allows the caller of BashEnv to supply their own FS
+- Turn each agent-examples/\*.md file into a .test.ts file that validates the scenario works as expected
+- Implement the more advanced commands from bash-examples.md

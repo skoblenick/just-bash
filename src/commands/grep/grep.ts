@@ -53,7 +53,7 @@ export const grepCommand: Command = {
     }
 
     // Build regex
-    let regexPattern = extendedRegex ? pattern : escapeRegex(pattern);
+    let regexPattern = extendedRegex ? pattern : escapeRegexForBasicGrep(pattern);
     if (wholeWord) {
       regexPattern = `\\b${regexPattern}\\b`;
     }
@@ -148,8 +148,10 @@ export const grepCommand: Command = {
   },
 };
 
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function escapeRegexForBasicGrep(str: string): string {
+  // Basic grep (BRE) supports: . * ^ $ [] \
+  // Only escape extended regex characters: + ? | () {}
+  return str.replace(/[+?{}()|]/g, '\\$&');
 }
 
 function grepContent(

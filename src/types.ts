@@ -1,4 +1,4 @@
-import { VirtualFs } from './fs.js';
+import { IFileSystem } from './fs-interface.js';
 
 export interface ExecResult {
   stdout: string;
@@ -7,7 +7,7 @@ export interface ExecResult {
 }
 
 export interface CommandContext {
-  fs: VirtualFs;
+  fs: IFileSystem;
   cwd: string;
   env: Record<string, string>;
   stdin: string;
@@ -19,3 +19,6 @@ export interface Command {
 }
 
 export type CommandRegistry = Map<string, Command>;
+
+// Re-export IFileSystem for convenience
+export type { IFileSystem };

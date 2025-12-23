@@ -32,7 +32,9 @@ export const echoCommand: Command = {
     let output = args.slice(startIndex).join(' ');
 
     if (interpretEscapes) {
+      // Process escape sequences - use placeholder for \\ first to avoid double-interpretation
       output = output
+        .replace(/\\\\/g, '\x00BACKSLASH\x00')  // Temporarily replace \\ with placeholder
         .replace(/\\n/g, '\n')
         .replace(/\\t/g, '\t')
         .replace(/\\r/g, '\r')
@@ -40,7 +42,7 @@ export const echoCommand: Command = {
         .replace(/\\b/g, '\b')
         .replace(/\\f/g, '\f')
         .replace(/\\v/g, '\v')
-        .replace(/\\\\/g, '\\');
+        .replace(/\x00BACKSLASH\x00/g, '\\');  // Restore backslashes
     }
 
     if (!noNewline) {
