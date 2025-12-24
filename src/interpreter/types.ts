@@ -1,22 +1,36 @@
-import type { IFileSystem } from "../fs.js";
-import type { ExecResult } from "../types.js";
-
 /**
- * Context passed to interpreter modules for executing commands
+ * Interpreter Types
  */
-export interface InterpreterContext {
-  /** Virtual filesystem */
-  fs: IFileSystem;
-  /** Current working directory */
-  cwd: string;
-  /** Environment variables */
+
+import type {
+  CommandNode,
+  FunctionDefNode,
+  ScriptNode,
+  StatementNode,
+} from "../ast/types.js";
+import type { IFileSystem } from "../fs-interface.js";
+import type { CommandRegistry, ExecResult } from "../types.js";
+
+export interface InterpreterState {
   env: Record<string, string>;
-  /** Execute a command string */
-  exec: (cmd: string) => Promise<ExecResult>;
-  /** Expand variables in a string (async, supports command substitution) */
-  expandVariables: (str: string) => Promise<string>;
-  /** Resolve a path relative to cwd */
-  resolvePath: (path: string) => string;
-  /** Maximum loop iterations allowed */
+  cwd: string;
+  previousDir: string;
+  functions: Map<string, FunctionDefNode>;
+  localScopes: Map<string, string | undefined>[];
+  callDepth: number;
+  commandCount: number;
+  lastExitCode: number;
+}
+
+export interface InterpreterContext {
+  state: InterpreterState;
+  fs: IFileSystem;
+  commands: CommandRegistry;
+  maxCallDepth: number;
+  maxCommandCount: number;
   maxLoopIterations: number;
+  execFn: (script: string) => Promise<ExecResult>;
+  executeScript: (node: ScriptNode) => Promise<ExecResult>;
+  executeStatement: (node: StatementNode) => Promise<ExecResult>;
+  executeCommand: (node: CommandNode, stdin: string) => Promise<ExecResult>;
 }

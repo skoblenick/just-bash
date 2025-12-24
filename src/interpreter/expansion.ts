@@ -1,509 +1,483 @@
-import type { ExecResult } from "../types.js";
+/**
+ * Word Expansion
+ *
+ * Handles shell word expansion including:
+ * - Variable expansion ($VAR, ${VAR})
+ * - Command substitution $(...)
+ * - Arithmetic expansion $((...))
+ * - Tilde expansion (~)
+ * - Brace expansion {a,b,c}
+ * - Glob expansion (*, ?, [...])
+ */
 
-export interface ExpansionContext {
-  /** Environment variables */
-  env: Record<string, string>;
-  /** Execute a command string (for command substitution) */
-  exec: (cmd: string) => Promise<ExecResult>;
+import type {
+  ArithExpr,
+  ParameterExpansionPart,
+  WordNode,
+  WordPart,
+} from "../ast/types.js";
+import { GlobExpander } from "../shell/glob.js";
+import { evaluateArithmetic } from "./arithmetic.js";
+import type { InterpreterContext } from "./types.js";
+
+// Helper to extract numeric value from an arithmetic expression
+function getArithValue(expr: ArithExpr): number {
+  if (expr.type === "ArithNumber") {
+    return expr.value;
+  }
+  return 0;
 }
 
-/**
- * Expand variables in a string synchronously (no command substitution)
- */
-export function expandVariablesSync(
-  str: string,
-  env: Record<string, string>,
-): string {
-  let result = "";
-  let i = 0;
+// Helper to extract literal value from a word part
+function getPartValue(part: WordPart): string {
+  switch (part.type) {
+    case "Literal":
+    case "SingleQuoted":
+    case "Escaped":
+      return part.value;
+    default:
+      return "";
+  }
+}
 
-  while (i < str.length) {
-    // Handle escaped dollar sign marker (\x01$) - output literal $
-    if (str[i] === "\x01" && str[i + 1] === "$") {
-      result += "$";
-      i += 2;
-      continue;
+// Helper to get string value from word parts
+function getWordPartsValue(parts: WordPart[]): string {
+  return parts.map(getPartValue).join("");
+}
+
+// Check if a word part requires async execution
+function partNeedsAsync(part: WordPart): boolean {
+  switch (part.type) {
+    case "CommandSubstitution":
+      return true;
+    case "DoubleQuoted":
+      return part.parts.some(partNeedsAsync);
+    case "BraceExpansion":
+      return part.items.some(
+        (item) => item.type === "Word" && wordNeedsAsync(item.word),
+      );
+    default:
+      return false;
+  }
+}
+
+// Check if a word requires async execution
+function wordNeedsAsync(word: WordNode): boolean {
+  return word.parts.some(partNeedsAsync);
+}
+
+// Sync version of expandPart for parts that don't need async
+function expandPartSync(ctx: InterpreterContext, part: WordPart): string {
+  switch (part.type) {
+    case "Literal":
+      return part.value;
+
+    case "SingleQuoted":
+      return part.value;
+
+    case "DoubleQuoted": {
+      const parts: string[] = [];
+      for (const p of part.parts) {
+        parts.push(expandPartSync(ctx, p));
+      }
+      return parts.join("");
     }
 
-    if (str[i] === "$" && i + 1 < str.length) {
-      const nextChar = str[i + 1];
+    case "Escaped":
+      return part.value;
 
-      // Handle $((expr)) arithmetic expansion
-      if (nextChar === "(" && str[i + 2] === "(") {
-        const closeIndex = findMatchingDoubleParen(str, i + 2);
-        if (closeIndex !== -1) {
-          const expr = str.slice(i + 3, closeIndex);
-          result += evaluateArithmetic(expr, env);
-          i = closeIndex + 2; // skip past ))
-          continue;
-        }
+    case "ParameterExpansion":
+      return expandParameter(ctx, part);
+
+    case "ArithmeticExpansion": {
+      const value = evaluateArithmetic(ctx, part.expression.expression);
+      return String(value);
+    }
+
+    case "TildeExpansion":
+      if (part.user === null) {
+        return ctx.state.env.HOME || "/home/user";
       }
+      return `/home/${part.user}`;
 
-      // Skip $(cmd) - handled by async version
-      if (nextChar === "(") {
-        const closeIndex = findMatchingParen(str, i + 1);
-        if (closeIndex !== -1) {
-          // Leave command substitution unexpanded in sync version
-          result += str.slice(i, closeIndex + 1);
-          i = closeIndex + 1;
-          continue;
-        }
-      }
-
-      // Handle ${VAR} and ${VAR:-default}
-      if (nextChar === "{") {
-        const closeIndex = str.indexOf("}", i + 2);
-        if (closeIndex !== -1) {
-          const content = str.slice(i + 2, closeIndex);
-          const defaultMatch = content.match(/^([^:]+):-(.*)$/);
-          if (defaultMatch) {
-            const [, varName, defaultValue] = defaultMatch;
-            result += env[varName] ?? defaultValue;
-          } else {
-            result += env[content] ?? "";
+    case "BraceExpansion": {
+      const results: string[] = [];
+      for (const item of part.items) {
+        if (item.type === "Range") {
+          const start = item.start;
+          const end = item.end;
+          if (typeof start === "number" && typeof end === "number") {
+            const step = item.step || 1;
+            if (start <= end) {
+              for (let i = start; i <= end; i += step) results.push(String(i));
+            } else {
+              for (let i = start; i >= end; i -= step) results.push(String(i));
+            }
+          } else if (typeof start === "string" && typeof end === "string") {
+            const startCode = start.charCodeAt(0);
+            const endCode = end.charCodeAt(0);
+            if (startCode <= endCode) {
+              for (let i = startCode; i <= endCode; i++)
+                results.push(String.fromCharCode(i));
+            } else {
+              for (let i = startCode; i >= endCode; i--)
+                results.push(String.fromCharCode(i));
+            }
           }
-          i = closeIndex + 1;
-          continue;
+        } else {
+          results.push(expandWordSync(ctx, item.word));
         }
       }
-
-      // Handle special variables: $@, $#, $$, $?, $!, $*
-      if ("@#$?!*".includes(nextChar)) {
-        result += env[nextChar] ?? "";
-        i += 2;
-        continue;
-      }
-
-      // Handle positional parameters: $0, $1, $2, ...
-      if (/[0-9]/.test(nextChar)) {
-        result += env[nextChar] ?? "";
-        i += 2;
-        continue;
-      }
-
-      // Handle $VAR
-      if (/[A-Za-z_]/.test(nextChar)) {
-        let varName = nextChar;
-        let j = i + 2;
-        while (j < str.length && /[A-Za-z0-9_]/.test(str[j])) {
-          varName += str[j];
-          j++;
-        }
-        result += env[varName] ?? "";
-        i = j;
-        continue;
-      }
-
-      // Lone $ or unrecognized pattern
-      result += str[i];
-      i++;
-    } else {
-      result += str[i];
-      i++;
+      return results.join(" ");
     }
+
+    case "Glob":
+      return part.pattern;
+
+    default:
+      return "";
+  }
+}
+
+// Sync version of expandWord for words that don't need async
+function expandWordSync(ctx: InterpreterContext, word: WordNode): string {
+  const wordParts = word.parts;
+  const len = wordParts.length;
+
+  if (len === 1) {
+    return expandPartSync(ctx, wordParts[0]);
   }
 
-  return result;
+  const parts: string[] = [];
+  for (let i = 0; i < len; i++) {
+    parts.push(expandPartSync(ctx, wordParts[i]));
+  }
+  return parts.join("");
 }
 
-/**
- * Expand variables in a string asynchronously (with command substitution support)
- */
-export async function expandVariablesAsync(
-  str: string,
-  ctx: ExpansionContext,
+export async function expandWord(
+  ctx: InterpreterContext,
+  word: WordNode,
 ): Promise<string> {
-  let result = "";
-  let i = 0;
-
-  while (i < str.length) {
-    // Handle escaped dollar sign marker (\x01$) - output literal $
-    if (str[i] === "\x01" && str[i + 1] === "$") {
-      result += "$";
-      i += 2;
-      continue;
-    }
-
-    if (str[i] === "$" && i + 1 < str.length) {
-      const nextChar = str[i + 1];
-
-      // Handle $((expr)) arithmetic expansion
-      if (nextChar === "(" && str[i + 2] === "(") {
-        const closeIndex = findMatchingDoubleParen(str, i + 2);
-        if (closeIndex !== -1) {
-          const expr = str.slice(i + 3, closeIndex);
-          result += evaluateArithmetic(expr, ctx.env);
-          i = closeIndex + 2; // skip past ))
-          continue;
-        }
-      }
-
-      // Handle $(cmd) command substitution
-      if (nextChar === "(") {
-        const closeIndex = findMatchingParen(str, i + 1);
-        if (closeIndex !== -1) {
-          const cmd = str.slice(i + 2, closeIndex);
-          const cmdResult = await ctx.exec(cmd);
-          // Command substitution returns stdout with trailing newline removed
-          result += cmdResult.stdout.replace(/\n$/, "");
-          i = closeIndex + 1;
-          continue;
-        }
-      }
-
-      // Handle ${VAR} and ${VAR:-default}
-      if (nextChar === "{") {
-        const closeIndex = str.indexOf("}", i + 2);
-        if (closeIndex !== -1) {
-          const content = str.slice(i + 2, closeIndex);
-          const defaultMatch = content.match(/^([^:]+):-(.*)$/);
-          if (defaultMatch) {
-            const [, varName, defaultValue] = defaultMatch;
-            result += ctx.env[varName] ?? defaultValue;
-          } else {
-            result += ctx.env[content] ?? "";
-          }
-          i = closeIndex + 1;
-          continue;
-        }
-      }
-
-      // Handle special variables: $@, $#, $$, $?, $!, $*
-      if ("@#$?!*".includes(nextChar)) {
-        result += ctx.env[nextChar] ?? "";
-        i += 2;
-        continue;
-      }
-
-      // Handle positional parameters: $0, $1, $2, ...
-      if (/[0-9]/.test(nextChar)) {
-        result += ctx.env[nextChar] ?? "";
-        i += 2;
-        continue;
-      }
-
-      // Handle $VAR
-      if (/[A-Za-z_]/.test(nextChar)) {
-        let varName = nextChar;
-        let j = i + 2;
-        while (j < str.length && /[A-Za-z0-9_]/.test(str[j])) {
-          varName += str[j];
-          j++;
-        }
-        result += ctx.env[varName] ?? "";
-        i = j;
-        continue;
-      }
-
-      // Lone $ or unrecognized pattern
-      result += str[i];
-      i++;
-    } else {
-      result += str[i];
-      i++;
-    }
+  // Fast path: if no async parts, use sync version
+  if (!wordNeedsAsync(word)) {
+    return expandWordSync(ctx, word);
   }
-
-  return result;
+  return expandWordAsync(ctx, word);
 }
 
-/**
- * Find matching parenthesis, handling nesting
- */
-export function findMatchingParen(str: string, start: number): number {
-  let depth = 1;
-  let i = start + 1;
-  while (i < str.length && depth > 0) {
-    if (str[i] === "(") depth++;
-    else if (str[i] === ")") depth--;
-    if (depth > 0) i++;
-  }
-  return depth === 0 ? i : -1;
-}
+// Analyze word parts for expansion behavior
+function analyzeWordParts(parts: WordPart[]): {
+  hasQuoted: boolean;
+  hasCommandSub: boolean;
+  hasArrayVar: boolean;
+} {
+  let hasQuoted = false;
+  let hasCommandSub = false;
+  let hasArrayVar = false;
 
-/**
- * Find matching )) for arithmetic expansion
- */
-export function findMatchingDoubleParen(str: string, start: number): number {
-  let depth = 1;
-  let i = start + 1;
-  while (i < str.length && depth > 0) {
-    if (str[i] === "(" && str[i + 1] === "(") {
-      depth++;
-      i++;
-    } else if (str[i] === ")" && str[i + 1] === ")") {
-      depth--;
-      if (depth === 0) return i;
-      i++;
+  for (const part of parts) {
+    if (part.type === "SingleQuoted" || part.type === "DoubleQuoted") {
+      hasQuoted = true;
     }
-    i++;
-  }
-  return -1;
-}
-
-/**
- * Evaluate arithmetic expression for $((expr))
- */
-export function evaluateArithmetic(
-  expr: string,
-  env: Record<string, string>,
-): string {
-  // First expand any variables in the expression
-  let expanded = expandVariablesSync(expr, env);
-
-  // Handle variable names without $ prefix (bash allows this in arithmetic)
-  expanded = expanded.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g, (match) => {
-    // Check if it's a number or operator
-    if (/^[0-9]+$/.test(match)) return match;
-    if (["true", "false"].includes(match)) return match === "true" ? "1" : "0";
-    // It's a variable name - look it up
-    const value = env[match];
-    return value !== undefined ? value : "0";
-  });
-
-  try {
-    // Evaluate the arithmetic expression safely
-    // Support: + - * / % ** ( ) < > <= >= == != && || ! ~ & | ^ << >>
-    const result = evalArithmeticExpr(expanded);
-    return String(Math.trunc(result));
-  } catch {
-    return "0";
-  }
-}
-
-/**
- * Safely evaluate an arithmetic expression
- */
-export function evalArithmeticExpr(expr: string): number {
-  // Tokenize
-  const tokens: (string | number)[] = [];
-  let i = 0;
-  while (i < expr.length) {
-    // Skip whitespace
-    if (/\s/.test(expr[i])) {
-      i++;
-      continue;
+    if (part.type === "CommandSubstitution") {
+      hasCommandSub = true;
     }
-    // Number
-    if (/[0-9]/.test(expr[i])) {
-      let num = "";
-      while (i < expr.length && /[0-9]/.test(expr[i])) {
-        num += expr[i++];
-      }
-      tokens.push(parseInt(num, 10));
-      continue;
-    }
-    // Operators (check longer ones first)
-    const ops = [
-      "**",
-      "<<",
-      ">>",
-      "<=",
-      ">=",
-      "==",
-      "!=",
-      "&&",
-      "||",
-      "+",
-      "-",
-      "*",
-      "/",
-      "%",
-      "<",
-      ">",
-      "&",
-      "|",
-      "^",
-      "~",
-      "!",
-      "(",
-      ")",
-    ];
-    let matched = false;
-    for (const op of ops) {
-      if (expr.slice(i, i + op.length) === op) {
-        tokens.push(op);
-        i += op.length;
-        matched = true;
-        break;
-      }
-    }
-    if (!matched) i++;
-  }
-
-  // Simple recursive descent parser
-  let pos = 0;
-
-  const peek = (): string | number | undefined => tokens[pos];
-  const consume = (): string | number => tokens[pos++];
-
-  const parseExpr = (): number => parseOr();
-
-  const parseOr = (): number => {
-    let left = parseAnd();
-    while (peek() === "||") {
-      consume();
-      const right = parseAnd();
-      left = left || right ? 1 : 0;
-    }
-    return left;
-  };
-
-  const parseAnd = (): number => {
-    let left = parseBitOr();
-    while (peek() === "&&") {
-      consume();
-      const right = parseBitOr();
-      left = left && right ? 1 : 0;
-    }
-    return left;
-  };
-
-  const parseBitOr = (): number => {
-    let left = parseBitXor();
-    while (peek() === "|") {
-      consume();
-      left = left | parseBitXor();
-    }
-    return left;
-  };
-
-  const parseBitXor = (): number => {
-    let left = parseBitAnd();
-    while (peek() === "^") {
-      consume();
-      left = left ^ parseBitAnd();
-    }
-    return left;
-  };
-
-  const parseBitAnd = (): number => {
-    let left = parseEquality();
-    while (peek() === "&") {
-      consume();
-      left = left & parseEquality();
-    }
-    return left;
-  };
-
-  const parseEquality = (): number => {
-    let left = parseRelational();
-    while (peek() === "==" || peek() === "!=") {
-      const op = consume();
-      const right = parseRelational();
-      left = op === "==" ? (left === right ? 1 : 0) : left !== right ? 1 : 0;
-    }
-    return left;
-  };
-
-  const parseRelational = (): number => {
-    let left = parseShift();
-    while (
-      peek() === "<" ||
-      peek() === ">" ||
-      peek() === "<=" ||
-      peek() === ">="
+    if (
+      part.type === "ParameterExpansion" &&
+      (part.parameter === "@" || part.parameter === "*")
     ) {
-      const op = consume();
-      const right = parseShift();
-      switch (op) {
-        case "<":
-          left = left < right ? 1 : 0;
-          break;
-        case ">":
-          left = left > right ? 1 : 0;
-          break;
-        case "<=":
-          left = left <= right ? 1 : 0;
-          break;
-        case ">=":
-          left = left >= right ? 1 : 0;
-          break;
+      hasArrayVar = true;
+    }
+  }
+
+  return { hasQuoted, hasCommandSub, hasArrayVar };
+}
+
+export async function expandWordWithGlob(
+  ctx: InterpreterContext,
+  word: WordNode,
+): Promise<{ values: string[]; quoted: boolean }> {
+  const wordParts = word.parts;
+  const { hasQuoted, hasCommandSub, hasArrayVar } = analyzeWordParts(wordParts);
+
+  // Fast path: no async needed, use sync expansion
+  const needsAsync = wordNeedsAsync(word);
+  const value = needsAsync
+    ? await expandWordAsync(ctx, word)
+    : expandWordSync(ctx, word);
+
+  if (!hasQuoted && (hasCommandSub || hasArrayVar) && value.includes(" ")) {
+    const splitValues = value.split(/\s+/).filter((v) => v !== "");
+    if (splitValues.length > 1) {
+      return { values: splitValues, quoted: false };
+    }
+  }
+
+  if (!hasQuoted && /[*?[]/.test(value)) {
+    const globExpander = new GlobExpander(ctx.fs, ctx.state.cwd);
+    const matches = await globExpander.expand(value);
+    if (matches.length > 0) {
+      return { values: matches, quoted: false };
+    }
+  }
+
+  return { values: [value], quoted: hasQuoted };
+}
+
+// Async version of expandWord (internal)
+async function expandWordAsync(
+  ctx: InterpreterContext,
+  word: WordNode,
+): Promise<string> {
+  const wordParts = word.parts;
+  const len = wordParts.length;
+
+  if (len === 1) {
+    return expandPart(ctx, wordParts[0]);
+  }
+
+  const parts: string[] = [];
+  for (let i = 0; i < len; i++) {
+    parts.push(await expandPart(ctx, wordParts[i]));
+  }
+  return parts.join("");
+}
+
+async function expandPart(
+  ctx: InterpreterContext,
+  part: WordPart,
+): Promise<string> {
+  switch (part.type) {
+    case "Literal":
+      return part.value;
+
+    case "SingleQuoted":
+      return part.value;
+
+    case "DoubleQuoted": {
+      const parts: string[] = [];
+      for (const p of part.parts) {
+        parts.push(await expandPart(ctx, p));
       }
+      return parts.join("");
     }
-    return left;
-  };
 
-  const parseShift = (): number => {
-    let left = parseAdditive();
-    while (peek() === "<<" || peek() === ">>") {
-      const op = consume();
-      const right = parseAdditive();
-      left = op === "<<" ? left << right : left >> right;
+    case "Escaped":
+      return part.value;
+
+    case "ParameterExpansion":
+      return expandParameter(ctx, part);
+
+    case "CommandSubstitution": {
+      const result = await ctx.executeScript(part.body);
+      return result.stdout.replace(/\n+$/, "");
     }
-    return left;
-  };
 
-  const parseAdditive = (): number => {
-    let left = parseMultiplicative();
-    while (peek() === "+" || peek() === "-") {
-      const op = consume();
-      const right = parseMultiplicative();
-      left = op === "+" ? left + right : left - right;
+    case "ArithmeticExpansion": {
+      const value = evaluateArithmetic(ctx, part.expression.expression);
+      return String(value);
     }
-    return left;
-  };
 
-  const parseMultiplicative = (): number => {
-    let left = parsePower();
-    while (peek() === "*" || peek() === "/" || peek() === "%") {
-      const op = consume();
-      const right = parsePower();
-      switch (op) {
-        case "*":
-          left = left * right;
-          break;
-        case "/":
-          left = right !== 0 ? Math.trunc(left / right) : 0;
-          break;
-        case "%":
-          left = right !== 0 ? left % right : 0;
-          break;
+    case "TildeExpansion":
+      if (part.user === null) {
+        return ctx.state.env.HOME || "/home/user";
       }
-    }
-    return left;
-  };
+      return `/home/${part.user}`;
 
-  const parsePower = (): number => {
-    const left = parseUnary();
-    if (peek() === "**") {
-      consume();
-      const right = parsePower(); // right-associative
-      return left ** right;
+    case "BraceExpansion": {
+      const results: string[] = [];
+      for (const item of part.items) {
+        if (item.type === "Range") {
+          const start = item.start;
+          const end = item.end;
+          if (typeof start === "number" && typeof end === "number") {
+            const step = item.step || 1;
+            if (start <= end) {
+              for (let i = start; i <= end; i += step) results.push(String(i));
+            } else {
+              for (let i = start; i >= end; i -= step) results.push(String(i));
+            }
+          } else if (typeof start === "string" && typeof end === "string") {
+            const startCode = start.charCodeAt(0);
+            const endCode = end.charCodeAt(0);
+            if (startCode <= endCode) {
+              for (let i = startCode; i <= endCode; i++)
+                results.push(String.fromCharCode(i));
+            } else {
+              for (let i = startCode; i >= endCode; i--)
+                results.push(String.fromCharCode(i));
+            }
+          }
+        } else {
+          results.push(await expandWord(ctx, item.word));
+        }
+      }
+      return results.join(" ");
     }
-    return left;
-  };
 
-  const parseUnary = (): number => {
-    if (peek() === "-") {
-      consume();
-      return -parseUnary();
-    }
-    if (peek() === "+") {
-      consume();
-      return parseUnary();
-    }
-    if (peek() === "!") {
-      consume();
-      return parseUnary() ? 0 : 1;
-    }
-    if (peek() === "~") {
-      consume();
-      return ~parseUnary();
-    }
-    return parsePrimary();
-  };
+    case "Glob":
+      return part.pattern;
 
-  const parsePrimary = (): number => {
-    if (peek() === "(") {
-      consume();
-      const val = parseExpr();
-      if (peek() === ")") consume();
-      return val;
-    }
-    const token = consume();
-    return typeof token === "number" ? token : 0;
-  };
+    default:
+      return "";
+  }
+}
 
-  return parseExpr();
+function expandParameter(
+  ctx: InterpreterContext,
+  part: ParameterExpansionPart,
+): string {
+  const { parameter, operation } = part;
+  const value = getVariable(ctx, parameter);
+
+  if (!operation) {
+    return value;
+  }
+
+  const isUnset = !(parameter in ctx.state.env);
+  const isEmpty = value === "";
+
+  switch (operation.type) {
+    case "DefaultValue": {
+      const useDefault = isUnset || (operation.checkEmpty && isEmpty);
+      if (useDefault && operation.word) {
+        return getWordPartsValue(operation.word.parts);
+      }
+      return value;
+    }
+
+    case "AssignDefault": {
+      const useDefault = isUnset || (operation.checkEmpty && isEmpty);
+      if (useDefault && operation.word) {
+        const defaultValue = getWordPartsValue(operation.word.parts);
+        ctx.state.env[parameter] = defaultValue;
+        return defaultValue;
+      }
+      return value;
+    }
+
+    case "ErrorIfUnset": {
+      const shouldError = isUnset || (operation.checkEmpty && isEmpty);
+      if (shouldError) {
+        const message = operation.word
+          ? getWordPartsValue(operation.word.parts)
+          : `${parameter}: parameter null or not set`;
+        throw new Error(message);
+      }
+      return value;
+    }
+
+    case "UseAlternative": {
+      const useAlternative = !(isUnset || (operation.checkEmpty && isEmpty));
+      if (useAlternative && operation.word) {
+        return getWordPartsValue(operation.word.parts);
+      }
+      return "";
+    }
+
+    case "Length":
+      return String(value.length);
+
+    case "Substring": {
+      const offset = operation.offset
+        ? getArithValue(operation.offset.expression)
+        : 0;
+      const length = operation.length
+        ? getArithValue(operation.length.expression)
+        : undefined;
+      let start = offset;
+      if (start < 0) start = Math.max(0, value.length + start);
+      if (length !== undefined) {
+        if (length < 0) {
+          return value.slice(start, Math.max(start, value.length + length));
+        }
+        return value.slice(start, start + length);
+      }
+      return value.slice(start);
+    }
+
+    case "PatternRemoval": {
+      const pattern = operation.pattern
+        ? getWordPartsValue(operation.pattern.parts)
+        : "";
+      const regex = patternToRegex(pattern, operation.greedy);
+      if (operation.side === "prefix") {
+        return value.replace(new RegExp(`^${regex}`), "");
+      }
+      return value.replace(new RegExp(`${regex}$`), "");
+    }
+
+    case "PatternReplacement": {
+      const pattern = operation.pattern
+        ? getWordPartsValue(operation.pattern.parts)
+        : "";
+      const replacement = operation.replacement
+        ? getWordPartsValue(operation.replacement.parts)
+        : "";
+      const regex = patternToRegex(pattern, true);
+      const flags = operation.all ? "g" : "";
+      return value.replace(new RegExp(regex, flags), replacement);
+    }
+
+    case "CaseModification": {
+      if (operation.direction === "upper") {
+        return operation.all
+          ? value.toUpperCase()
+          : value.charAt(0).toUpperCase() + value.slice(1);
+      }
+      return operation.all
+        ? value.toLowerCase()
+        : value.charAt(0).toLowerCase() + value.slice(1);
+    }
+
+    case "Indirection": {
+      return getVariable(ctx, value);
+    }
+
+    default:
+      return value;
+  }
+}
+
+export function getVariable(ctx: InterpreterContext, name: string): string {
+  switch (name) {
+    case "?":
+      return String(ctx.state.lastExitCode);
+    case "$":
+      return String(process.pid);
+    case "#":
+      return ctx.state.env["#"] || "0";
+    case "@":
+    case "*":
+      return ctx.state.env["@"] || "";
+    case "0":
+      return ctx.state.env["0"] || "bash";
+    case "PWD":
+      return ctx.state.cwd;
+    case "OLDPWD":
+      return ctx.state.previousDir;
+  }
+
+  if (/^[1-9][0-9]*$/.test(name)) {
+    return ctx.state.env[name] || "";
+  }
+
+  return ctx.state.env[name] || "";
+}
+
+export function patternToRegex(pattern: string, greedy: boolean): string {
+  let regex = "";
+  for (const char of pattern) {
+    if (char === "*") {
+      regex += greedy ? ".*" : ".*?";
+    } else if (char === "?") {
+      regex += ".";
+    } else if (/[\\^$.|+(){}[\]]/.test(char)) {
+      regex += `\\${char}`;
+    } else {
+      regex += char;
+    }
+  }
+  return regex;
 }
