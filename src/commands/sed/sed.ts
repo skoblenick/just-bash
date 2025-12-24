@@ -1,117 +1,124 @@
 import type { Command, CommandContext, ExecResult } from "../../types.js";
-import { unknownOption } from "../help.js";
+import { hasHelpFlag, showHelp, unknownOption } from "../help.js";
+import { createInitialState, executeCommands } from "./executor.js";
+import { parseMultipleScripts } from "./parser.js";
+import type { SedCommand, SedState } from "./types.js";
 
-interface SedCommand {
-  type: "substitute" | "print" | "delete";
-  pattern?: string;
-  replacement?: string;
-  global?: boolean;
-  ignoreCase?: boolean;
-  lineStart?: number | "$";
-  lineEnd?: number | "$";
-  addressPattern?: string;
-}
+const sedHelp = {
+  name: "sed",
+  summary: "stream editor for filtering and transforming text",
+  usage: "sed [OPTION]... {script} [input-file]...",
+  options: [
+    "-n, --quiet, --silent  suppress automatic printing of pattern space",
+    "-e script              add the script to commands to be executed",
+    "-i, --in-place         edit files in place",
+    "-E, -r, --regexp-extended  use extended regular expressions",
+    "    --help             display this help and exit",
+  ],
+  description: `Commands:
+  s/regexp/replacement/[flags]  substitute
+  d                             delete pattern space
+  p                             print pattern space
+  a\\ text                       append text after line
+  i\\ text                       insert text before line
+  c\\ text                       change (replace) line with text
+  h                             copy pattern space to hold space
+  H                             append pattern space to hold space
+  g                             copy hold space to pattern space
+  G                             append hold space to pattern space
+  x                             exchange pattern and hold spaces
+  n                             read next line into pattern space
+  q                             quit
 
-function parseSedScript(script: string): SedCommand | null {
-  // Handle $ (last line) address + command: $p, $d
-  const lastLineMatch = script.match(/^\$\s*([pd])$/);
-  if (lastLineMatch) {
-    const [, cmd] = lastLineMatch;
-    return {
-      type: cmd === "p" ? "print" : "delete",
-      lineStart: "$",
-      lineEnd: "$",
-    };
+Addresses:
+  N                             line number
+  $                             last line
+  /regexp/                      lines matching regexp
+  N,M                           range from line N to M`,
+};
+
+function processContent(
+  content: string,
+  commands: SedCommand[],
+  silent: boolean,
+): string {
+  const lines = content.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") {
+    lines.pop();
   }
 
-  // Handle line address + command: 5p, 5,10p, 5d, /pattern/d
-  const lineRangeMatch = script.match(/^(\d+)(?:,(\d+))?([pd])$/);
-  if (lineRangeMatch) {
-    const [, start, end, cmd] = lineRangeMatch;
-    return {
-      type: cmd === "p" ? "print" : "delete",
-      lineStart: parseInt(start, 10),
-      lineEnd: end ? parseInt(end, 10) : parseInt(start, 10),
+  const totalLines = lines.length;
+  let output = "";
+
+  // Persistent hold space across all lines
+  let holdSpace = "";
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const state: SedState = {
+      ...createInitialState(totalLines),
+      patternSpace: lines[lineIndex],
+      holdSpace: holdSpace,
+      lineNumber: lineIndex + 1,
+      totalLines,
     };
-  }
 
-  // Handle pattern address + delete: /pattern/d
-  const patternDeleteMatch = script.match(/^\/(.+)\/d$/);
-  if (patternDeleteMatch) {
-    return {
-      type: "delete",
-      addressPattern: patternDeleteMatch[1],
-    };
-  }
+    executeCommands(commands, state);
 
-  // Handle address + substitution: 1s/pattern/replacement/, 2,4s/pattern/replacement/, $s/pattern/replacement/
-  const addressSubMatch = script.match(
-    /^(\d+|\$)(?:,(\d+|\$))?\s*s(.)(.+?)\3(.*?)\3([gi]*)$/,
-  );
-  if (addressSubMatch) {
-    const [, start, end, , pattern, replacement, flags] = addressSubMatch;
-    return {
-      type: "substitute",
-      pattern,
-      replacement,
-      global: flags.includes("g"),
-      ignoreCase: flags.includes("i"),
-      lineStart: start === "$" ? "$" : parseInt(start, 10),
-      lineEnd: end
-        ? end === "$"
-          ? "$"
-          : parseInt(end, 10)
-        : start === "$"
-          ? "$"
-          : parseInt(start, 10),
-    };
-  }
+    // Preserve hold space for next line
+    holdSpace = state.holdSpace;
 
-  // Handle substitution: s/pattern/replacement/ or s/pattern/replacement/g or s/pattern/replacement/gi
-  const subMatch = script.match(/^s(.)(.+?)\1(.*?)\1([gi]*)$/);
-  if (subMatch) {
-    const [, , pattern, replacement, flags] = subMatch;
-    return {
-      type: "substitute",
-      pattern,
-      replacement,
-      global: flags.includes("g"),
-      ignoreCase: flags.includes("i"),
-    };
-  }
-
-  return null;
-}
-
-function processReplacement(replacement: string, match: string): string {
-  // Handle & (matched text) and \& (literal &)
-  let result = "";
-  let i = 0;
-  while (i < replacement.length) {
-    if (replacement[i] === "\\" && i + 1 < replacement.length) {
-      if (replacement[i + 1] === "&") {
-        result += "&";
-        i += 2;
-        continue;
+    // Handle insert commands (marked with __INSERT__ prefix)
+    const inserts: string[] = [];
+    const appends: string[] = [];
+    for (const item of state.appendBuffer) {
+      if (item.startsWith("__INSERT__")) {
+        inserts.push(item.slice(10));
+      } else {
+        appends.push(item);
       }
     }
-    if (replacement[i] === "&") {
-      result += match;
-    } else {
-      result += replacement[i];
+
+    // Output inserts before the line
+    for (const text of inserts) {
+      output += `${text}\n`;
     }
-    i++;
+
+    // Handle output
+    if (!state.deleted) {
+      if (silent) {
+        if (state.printed) {
+          output += `${state.patternSpace}\n`;
+        }
+      } else {
+        output += `${state.patternSpace}\n`;
+      }
+    }
+
+    // Output appends after the line
+    for (const text of appends) {
+      output += `${text}\n`;
+    }
+
+    // Check for quit command
+    if (state.quit) {
+      break;
+    }
   }
-  return result;
+
+  return output;
 }
 
 export const sedCommand: Command = {
   name: "sed",
   async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
+    if (hasHelpFlag(args)) {
+      return showHelp(sedHelp);
+    }
+
     const scripts: string[] = [];
     let silent = false;
     let inPlace = false;
-    let _extendedRegex = false; // -E/-r flag (accepted but regex is already extended in JS)
+    let _extendedRegex = false;
     const files: string[] = [];
 
     // Parse arguments
@@ -122,10 +129,9 @@ export const sedCommand: Command = {
       } else if (arg === "-i" || arg === "--in-place") {
         inPlace = true;
       } else if (arg.startsWith("-i")) {
-        // Handle -i with optional suffix (we ignore suffix for now)
         inPlace = true;
       } else if (arg === "-E" || arg === "-r" || arg === "--regexp-extended") {
-        _extendedRegex = true; // JavaScript regex is already extended
+        _extendedRegex = true;
       } else if (arg === "-e") {
         if (i + 1 < args.length) {
           scripts.push(args[++i]);
@@ -133,17 +139,14 @@ export const sedCommand: Command = {
       } else if (arg.startsWith("--")) {
         return unknownOption("sed", arg);
       } else if (arg.startsWith("-") && arg.length > 1) {
-        // Check for unknown short options
         for (const c of arg.slice(1)) {
           if (c !== "n" && c !== "e" && c !== "i" && c !== "E" && c !== "r") {
             return unknownOption("sed", `-${c}`);
           }
         }
-        // Handle combined flags like -ne
         if (arg.includes("n")) silent = true;
         if (arg.includes("i")) inPlace = true;
         if (arg.includes("E") || arg.includes("r")) _extendedRegex = true;
-        // -e in combined form would need next arg for script, handle separately
         if (arg.includes("e") && !arg.includes("n") && !arg.includes("i")) {
           if (i + 1 < args.length) {
             scripts.push(args[++i]);
@@ -164,17 +167,22 @@ export const sedCommand: Command = {
       };
     }
 
-    const sedCmds: SedCommand[] = [];
-    for (const script of scripts) {
-      const sedCmd = parseSedScript(script);
-      if (!sedCmd) {
-        return {
-          stdout: "",
-          stderr: `sed: invalid script: ${script}\n`,
-          exitCode: 1,
-        };
-      }
-      sedCmds.push(sedCmd);
+    // Parse all scripts
+    const { commands, error } = parseMultipleScripts(scripts);
+    if (error) {
+      return {
+        stdout: "",
+        stderr: `sed: ${error}\n`,
+        exitCode: 1,
+      };
+    }
+
+    if (commands.length === 0) {
+      return {
+        stdout: "",
+        stderr: "sed: no valid commands\n",
+        exitCode: 1,
+      };
     }
 
     let content = "";
@@ -182,104 +190,18 @@ export const sedCommand: Command = {
     // Read from files or stdin
     if (files.length === 0) {
       content = ctx.stdin;
-    } else {
-      for (const file of files) {
-        const filePath = ctx.fs.resolvePath(ctx.cwd, file);
-        try {
-          content += await ctx.fs.readFile(filePath);
-        } catch {
-          return {
-            stdout: "",
-            stderr: `sed: ${file}: No such file or directory\n`,
-            exitCode: 1,
-          };
-        }
-      }
-    }
-
-    // Split into lines
-    const lines = content.split("\n");
-    if (lines.length > 0 && lines[lines.length - 1] === "") {
-      lines.pop();
-    }
-
-    const totalLines = lines.length;
-
-    // Apply all sed commands to each line
-    let output = "";
-
-    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-      const lineNum = lineIndex + 1;
-      let line = lines[lineIndex];
-      let deleted = false;
-      let printed = false;
-
-      for (const sedCmd of sedCmds) {
-        if (deleted) break;
-
-        // Resolve $ to actual last line number
-        const resolveAddress = (
-          addr: number | "$" | undefined,
-        ): number | undefined => {
-          if (addr === "$") return totalLines;
-          return addr;
-        };
-
-        const lineStart = resolveAddress(sedCmd.lineStart);
-        const lineEnd = resolveAddress(sedCmd.lineEnd);
-
-        // Check if this line is in the address range (if specified)
-        const inRange =
-          lineStart === undefined ||
-          (lineNum >= lineStart && lineNum <= (lineEnd ?? lineStart));
-
-        if (sedCmd.type === "substitute" && inRange && sedCmd.pattern) {
-          let flags = "";
-          if (sedCmd.global) flags += "g";
-          if (sedCmd.ignoreCase) flags += "i";
-          const regex = new RegExp(sedCmd.pattern, flags);
-
-          // Handle & replacement
-          line = line.replace(regex, (match) =>
-            processReplacement(sedCmd.replacement ?? "", match),
-          );
-        } else if (sedCmd.type === "delete") {
-          if (sedCmd.addressPattern) {
-            const regex = new RegExp(sedCmd.addressPattern);
-            if (regex.test(line)) {
-              deleted = true;
-            }
-          } else if (inRange && lineStart !== undefined) {
-            deleted = true;
-          }
-        } else if (
-          sedCmd.type === "print" &&
-          inRange &&
-          lineStart !== undefined
-        ) {
-          printed = true;
-        }
-      }
-
-      if (!deleted) {
-        if (silent) {
-          if (printed) {
-            output += `${line}\n`;
-          }
-        } else {
-          output += `${line}\n`;
-        }
-      }
+      const output = processContent(content, commands, silent);
+      return { stdout: output, stderr: "", exitCode: 0 };
     }
 
     // Handle in-place editing
-    if (inPlace && files.length > 0) {
+    if (inPlace) {
       for (const file of files) {
         const filePath = ctx.fs.resolvePath(ctx.cwd, file);
-        // Re-process this specific file for in-place editing
-        let fileContent = "";
         try {
-          fileContent = await ctx.fs.readFile(filePath);
+          const fileContent = await ctx.fs.readFile(filePath);
+          const output = processContent(fileContent, commands, silent);
+          await ctx.fs.writeFile(filePath, output);
         } catch {
           return {
             stdout: "",
@@ -287,82 +209,25 @@ export const sedCommand: Command = {
             exitCode: 1,
           };
         }
-
-        const fileLines = fileContent.split("\n");
-        if (fileLines.length > 0 && fileLines[fileLines.length - 1] === "") {
-          fileLines.pop();
-        }
-
-        const fileTotalLines = fileLines.length;
-        let fileOutput = "";
-
-        for (let lineIndex = 0; lineIndex < fileLines.length; lineIndex++) {
-          const lineNum = lineIndex + 1;
-          let line = fileLines[lineIndex];
-          let deleted = false;
-          let printed = false;
-
-          for (const sedCmd of sedCmds) {
-            if (deleted) break;
-
-            const resolveAddress = (
-              addr: number | "$" | undefined,
-            ): number | undefined => {
-              if (addr === "$") return fileTotalLines;
-              return addr;
-            };
-
-            const lineStart = resolveAddress(sedCmd.lineStart);
-            const lineEnd = resolveAddress(sedCmd.lineEnd);
-
-            const inRange =
-              lineStart === undefined ||
-              (lineNum >= lineStart && lineNum <= (lineEnd ?? lineStart));
-
-            if (sedCmd.type === "substitute" && inRange && sedCmd.pattern) {
-              let flags = "";
-              if (sedCmd.global) flags += "g";
-              if (sedCmd.ignoreCase) flags += "i";
-              const regex = new RegExp(sedCmd.pattern, flags);
-              line = line.replace(regex, (match) =>
-                processReplacement(sedCmd.replacement ?? "", match),
-              );
-            } else if (sedCmd.type === "delete") {
-              if (sedCmd.addressPattern) {
-                const regex = new RegExp(sedCmd.addressPattern);
-                if (regex.test(line)) {
-                  deleted = true;
-                }
-              } else if (inRange && lineStart !== undefined) {
-                deleted = true;
-              }
-            } else if (
-              sedCmd.type === "print" &&
-              inRange &&
-              lineStart !== undefined
-            ) {
-              printed = true;
-            }
-          }
-
-          if (!deleted) {
-            if (silent) {
-              if (printed) {
-                fileOutput += `${line}\n`;
-              }
-            } else {
-              fileOutput += `${line}\n`;
-            }
-          }
-        }
-
-        // Write back to file
-        await ctx.fs.writeFile(filePath, fileOutput);
       }
-      // In-place mode produces no stdout
       return { stdout: "", stderr: "", exitCode: 0 };
     }
 
+    // Read all files and process
+    for (const file of files) {
+      const filePath = ctx.fs.resolvePath(ctx.cwd, file);
+      try {
+        content += await ctx.fs.readFile(filePath);
+      } catch {
+        return {
+          stdout: "",
+          stderr: `sed: ${file}: No such file or directory\n`,
+          exitCode: 1,
+        };
+      }
+    }
+
+    const output = processContent(content, commands, silent);
     return { stdout: output, stderr: "", exitCode: 0 };
   },
 };

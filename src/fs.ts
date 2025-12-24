@@ -1,33 +1,111 @@
 import type {
+  BufferEncoding,
   CpOptions,
   DirectoryEntry,
+  FileContent,
   FileEntry,
   FsEntry,
   FsStat,
   IFileSystem,
   MkdirOptions,
+  ReadFileOptions,
   RmOptions,
   SymlinkEntry,
+  WriteFileOptions,
 } from "./fs-interface.js";
 
 // Re-export for backwards compatibility
 export type {
+  BufferEncoding,
+  FileContent,
   FileEntry,
   DirectoryEntry,
   SymlinkEntry,
   FsEntry,
   FsStat,
   IFileSystem,
+  ReadFileOptions,
+  WriteFileOptions,
 };
 
 export interface FsData {
   [path: string]: FsEntry;
 }
 
+// Text encoder/decoder for encoding conversions
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+
+/**
+ * Helper to convert content to Uint8Array
+ */
+function toBuffer(content: FileContent, encoding?: BufferEncoding): Uint8Array {
+  if (content instanceof Uint8Array) {
+    return content;
+  }
+
+  // Handle different encodings
+  switch (encoding) {
+    case "base64":
+      return Uint8Array.from(atob(content), (c) => c.charCodeAt(0));
+    case "hex": {
+      const bytes = new Uint8Array(content.length / 2);
+      for (let i = 0; i < content.length; i += 2) {
+        bytes[i / 2] = parseInt(content.slice(i, i + 2), 16);
+      }
+      return bytes;
+    }
+    case "binary":
+    case "latin1":
+      return Uint8Array.from(content, (c) => c.charCodeAt(0));
+    default:
+      // utf8 or utf-8 or ascii
+      return textEncoder.encode(content);
+  }
+}
+
+/**
+ * Helper to convert Uint8Array to string with encoding
+ */
+function fromBuffer(
+  buffer: Uint8Array,
+  encoding?: BufferEncoding | null,
+): string {
+  switch (encoding) {
+    case "base64":
+      return btoa(String.fromCharCode(...buffer));
+    case "hex":
+      return Array.from(buffer)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+    case "binary":
+    case "latin1":
+      return String.fromCharCode(...buffer);
+    default:
+      // utf8 or utf-8 or ascii or null
+      return textDecoder.decode(buffer);
+  }
+}
+
+/**
+ * Helper to get encoding from options
+ */
+function getEncoding(
+  options?: ReadFileOptions | WriteFileOptions | BufferEncoding | null,
+): BufferEncoding | undefined {
+  if (options === null || options === undefined) {
+    return undefined;
+  }
+  if (typeof options === "string") {
+    return options;
+  }
+  return options.encoding ?? undefined;
+}
+
 export class VirtualFs implements IFileSystem {
   private data: Map<string, FsEntry> = new Map();
 
-  constructor(initialFiles?: Record<string, string>) {
+  constructor(initialFiles?: Record<string, FileContent>) {
     // Create root directory
     this.data.set("/", { type: "directory", mode: 0o755, mtime: new Date() });
 
@@ -84,19 +162,37 @@ export class VirtualFs implements IFileSystem {
   }
 
   // Sync method for writing files
-  writeFileSync(path: string, content: string): void {
+  writeFileSync(
+    path: string,
+    content: FileContent,
+    options?: WriteFileOptions | BufferEncoding,
+  ): void {
     const normalized = this.normalizePath(path);
     this.ensureParentDirs(normalized);
+
+    // Store content - convert to Uint8Array for internal storage
+    const encoding = getEncoding(options);
+    const buffer = toBuffer(content, encoding);
+
     this.data.set(normalized, {
       type: "file",
-      content,
+      content: buffer,
       mode: 0o644,
       mtime: new Date(),
     });
   }
 
   // Async public API
-  async readFile(path: string): Promise<string> {
+  async readFile(
+    path: string,
+    options?: ReadFileOptions | BufferEncoding,
+  ): Promise<string> {
+    const buffer = await this.readFileBuffer(path);
+    const encoding = getEncoding(options);
+    return fromBuffer(buffer, encoding);
+  }
+
+  async readFileBuffer(path: string): Promise<Uint8Array> {
     const normalized = this.normalizePath(path);
     let entry = this.data.get(normalized);
     let currentPath = normalized;
@@ -127,14 +223,27 @@ export class VirtualFs implements IFileSystem {
       );
     }
 
-    return entry.content;
+    // Return content as Uint8Array
+    if (entry.content instanceof Uint8Array) {
+      return entry.content;
+    }
+    // Legacy string content - convert to Uint8Array
+    return textEncoder.encode(entry.content);
   }
 
-  async writeFile(path: string, content: string): Promise<void> {
-    this.writeFileSync(path, content);
+  async writeFile(
+    path: string,
+    content: FileContent,
+    options?: WriteFileOptions | BufferEncoding,
+  ): Promise<void> {
+    this.writeFileSync(path, content, options);
   }
 
-  async appendFile(path: string, content: string): Promise<void> {
+  async appendFile(
+    path: string,
+    content: FileContent,
+    options?: WriteFileOptions | BufferEncoding,
+  ): Promise<void> {
     const normalized = this.normalizePath(path);
     const existing = this.data.get(normalized);
 
@@ -144,8 +253,30 @@ export class VirtualFs implements IFileSystem {
       );
     }
 
-    const currentContent = existing?.type === "file" ? existing.content : "";
-    this.writeFileSync(path, currentContent + content);
+    const encoding = getEncoding(options);
+    const newBuffer = toBuffer(content, encoding);
+
+    if (existing?.type === "file") {
+      // Get existing content as buffer
+      const existingBuffer =
+        existing.content instanceof Uint8Array
+          ? existing.content
+          : textEncoder.encode(existing.content);
+
+      // Concatenate buffers
+      const combined = new Uint8Array(existingBuffer.length + newBuffer.length);
+      combined.set(existingBuffer);
+      combined.set(newBuffer, existingBuffer.length);
+
+      this.data.set(normalized, {
+        type: "file",
+        content: combined,
+        mode: existing.mode,
+        mtime: new Date(),
+      });
+    } else {
+      this.writeFileSync(path, content, options);
+    }
   }
 
   async exists(path: string): Promise<boolean> {
@@ -170,9 +301,16 @@ export class VirtualFs implements IFileSystem {
       entry = targetEntry;
     }
 
-    // Calculate size: for files, it's the content length; for directories, it's 0
-    const size =
-      entry.type === "file" && entry.content ? entry.content.length : 0;
+    // Calculate size: for files, it's the byte length; for directories, it's 0
+    let size = 0;
+    if (entry.type === "file" && entry.content) {
+      if (entry.content instanceof Uint8Array) {
+        size = entry.content.length;
+      } else {
+        // Legacy string content - calculate byte length
+        size = textEncoder.encode(entry.content).length;
+      }
+    }
 
     return {
       isFile: entry.type === "file",
@@ -204,9 +342,16 @@ export class VirtualFs implements IFileSystem {
       };
     }
 
-    // Calculate size: for files, it's the content length; for directories, it's 0
-    const size =
-      entry.type === "file" && entry.content ? entry.content.length : 0;
+    // Calculate size: for files, it's the byte length; for directories, it's 0
+    let size = 0;
+    if (entry.type === "file" && entry.content) {
+      if (entry.content instanceof Uint8Array) {
+        size = entry.content.length;
+      } else {
+        // Legacy string content - calculate byte length
+        size = textEncoder.encode(entry.content).length;
+      }
+    }
 
     return {
       isFile: entry.type === "file",

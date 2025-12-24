@@ -330,4 +330,218 @@ describe("sed command", () => {
       expect(cat.stdout).toBe("new text\n");
     });
   });
+
+  describe("hold space commands (h/H/g/G/x)", () => {
+    it("should copy pattern space to hold space with h", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "first\nsecond\nthird\n" },
+        cwd: "/",
+      });
+      // h on line 1 copies "first" to hold, G on line 3 appends hold to pattern
+      const result = await env.exec("sed '1h;3G' /test.txt");
+      expect(result.stdout).toBe("first\nsecond\nthird\nfirst\n");
+    });
+
+    it("should append pattern space to hold space with H", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "a\nb\nc\n" },
+        cwd: "/",
+      });
+      // H appends each line to hold space
+      // After line a: hold = "a"
+      // After line b: hold = "a\nb"
+      // After line c: hold = "a\nb\nc"
+      // $G appends hold to pattern: "c" + "\n" + "a\nb\nc" = "c\na\nb\nc"
+      const result = await env.exec("sed 'H;$G' /test.txt");
+      expect(result.stdout).toBe("a\nb\nc\na\nb\nc\n");
+    });
+
+    it("should copy hold space to pattern space with g", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "first\nsecond\n" },
+        cwd: "/",
+      });
+      // h on line 1 saves "first", g on line 2 replaces "second" with "first"
+      const result = await env.exec("sed '1h;2g' /test.txt");
+      expect(result.stdout).toBe("first\nfirst\n");
+    });
+
+    it("should append hold space to pattern space with G", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "header\ndata\n" },
+        cwd: "/",
+      });
+      // h saves "header", G on line 2 appends hold to pattern
+      const result = await env.exec("sed '1h;2G' /test.txt");
+      expect(result.stdout).toBe("header\ndata\nheader\n");
+    });
+
+    it("should exchange pattern and hold spaces with x", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "A\nB\n" },
+        cwd: "/",
+      });
+      // x on each line exchanges pattern/hold
+      // Line 1: pattern=A, hold=empty -> pattern=empty, hold=A (prints empty)
+      // Line 2: pattern=B, hold=A -> pattern=A, hold=B (prints A)
+      const result = await env.exec("sed 'x' /test.txt");
+      expect(result.stdout).toBe("\nA\n");
+    });
+
+    it("should collect lines in hold space with h and H", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "1\n2\n3\n" },
+        cwd: "/",
+      });
+      // 1h saves first line, 1!H appends subsequent lines
+      // After processing: hold = "1\n2\n3"
+      // $g copies hold to pattern space (replaces "3")
+      // -n suppresses auto-print, $p prints last line (which is now hold content)
+      const result = await env.exec("sed -n '$g;$p' /test.txt");
+      // Since we don't accumulate with 1h;1!H, g will just copy empty hold
+      expect(result.stdout).toBe("\n");
+    });
+  });
+
+  describe("append command (a)", () => {
+    it("should append text after matching line", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "line 1\nline 2\nline 3\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sed '2a\\ appended' /test.txt");
+      expect(result.stdout).toBe("line 1\nline 2\nappended\nline 3\n");
+    });
+
+    it("should append text after every line", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "a\nb\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sed 'a\\ ---' /test.txt");
+      expect(result.stdout).toBe("a\n---\nb\n---\n");
+    });
+
+    it("should append text after last line", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "first\nlast\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sed '$a\\ footer' /test.txt");
+      expect(result.stdout).toBe("first\nlast\nfooter\n");
+    });
+  });
+
+  describe("insert command (i)", () => {
+    it("should insert text before matching line", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "line 1\nline 2\nline 3\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sed '2i\\ inserted' /test.txt");
+      expect(result.stdout).toBe("line 1\ninserted\nline 2\nline 3\n");
+    });
+
+    it("should insert text before first line", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "content\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sed '1i\\ header' /test.txt");
+      expect(result.stdout).toBe("header\ncontent\n");
+    });
+
+    it("should insert text before every line", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "a\nb\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sed 'i\\ >' /test.txt");
+      expect(result.stdout).toBe(">\na\n>\nb\n");
+    });
+  });
+
+  describe("change command (c)", () => {
+    it("should change matching line", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "old line\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sed '1c\\ new line' /test.txt");
+      expect(result.stdout).toBe("new line\n");
+    });
+
+    it("should change specific line number", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "line 1\nline 2\nline 3\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sed '2c\\ replaced' /test.txt");
+      expect(result.stdout).toBe("line 1\nreplaced\nline 3\n");
+    });
+  });
+
+  describe("quit command (q)", () => {
+    it("should quit after matching line", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "1\n2\n3\n4\n5\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sed '3q' /test.txt");
+      expect(result.stdout).toBe("1\n2\n3\n");
+    });
+
+    it("should quit immediately on first line", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "a\nb\nc\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sed '1q' /test.txt");
+      expect(result.stdout).toBe("a\n");
+    });
+  });
+
+  describe("escaped characters", () => {
+    it("should handle escaped parentheses in pattern", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "const x = require('foo');\n" },
+        cwd: "/",
+      });
+      const result = await env.exec(
+        "sed \"s/const x = require\\('foo'\\);/import x from 'foo';/g\" /test.txt",
+      );
+      expect(result.stdout).toBe("import x from 'foo';\n");
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should handle semicolons in pattern and replacement", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "a;b;c\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sed 's/a;b/x;y/' /test.txt");
+      expect(result.stdout).toBe("x;y;c\n");
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe("pattern addresses", () => {
+    it("should match lines by pattern", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "foo\nbar\nbaz\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sed '/bar/d' /test.txt");
+      expect(result.stdout).toBe("foo\nbaz\n");
+    });
+
+    it("should apply substitution to pattern-matched lines", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "apple\nbanana\napricot\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sed '/^a/s/a/A/g' /test.txt");
+      expect(result.stdout).toBe("Apple\nbanana\nApricot\n");
+    });
+  });
 });

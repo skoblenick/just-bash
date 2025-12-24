@@ -162,4 +162,98 @@ describe("sort command", () => {
       expect(result.stdout).toContain("--ignore-case");
     });
   });
+
+  describe("complex -k syntax", () => {
+    it("should sort by field range -k1,2", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "a b c\na a c\nb a a\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sort -k1,2 /test.txt");
+      expect(result.stdout).toBe("a a c\na b c\nb a a\n");
+    });
+
+    it("should sort by single field only with -k2,2", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "1 banana\n2 apple\n3 cherry\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sort -k2,2 /test.txt");
+      expect(result.stdout).toBe("2 apple\n1 banana\n3 cherry\n");
+    });
+
+    it("should support per-key numeric modifier -k2n", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "a 10\nb 2\nc 1\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sort -k2n /test.txt");
+      expect(result.stdout).toBe("c 1\nb 2\na 10\n");
+    });
+
+    it("should support per-key reverse modifier -k1r", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "a 1\nb 2\nc 3\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sort -k1r /test.txt");
+      expect(result.stdout).toBe("c 3\nb 2\na 1\n");
+    });
+
+    it("should support combined modifiers -k2,2nr", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "x 5\ny 10\nz 2\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sort -k2,2nr /test.txt");
+      expect(result.stdout).toBe("y 10\nx 5\nz 2\n");
+    });
+
+    it("should support multiple keys for secondary sort", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "a 2\nb 1\na 1\nb 2\n" },
+        cwd: "/",
+      });
+      // Sort by field 1, then by field 2 numerically
+      const result = await env.exec("sort -k1,1 -k2,2n /test.txt");
+      expect(result.stdout).toBe("a 1\na 2\nb 1\nb 2\n");
+    });
+
+    it("should support character position -k1.2", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "abc\nabc\nbac\naac\n" },
+        cwd: "/",
+      });
+      // Sort starting from 2nd character of field 1
+      const result = await env.exec("sort -k1.2 /test.txt");
+      expect(result.stdout).toBe("aac\nbac\nabc\nabc\n");
+    });
+
+    it("should support per-key ignore-case -k1f", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "Zebra\napple\nBANANA\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sort -k1f /test.txt");
+      expect(result.stdout).toBe("apple\nBANANA\nZebra\n");
+    });
+
+    it("should support custom delimiter with -t", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "c:3\na:1\nb:2\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sort -t: -k2n /test.txt");
+      expect(result.stdout).toBe("a:1\nb:2\nc:3\n");
+    });
+
+    it("should handle --key= syntax", async () => {
+      const env = new BashEnv({
+        files: { "/test.txt": "3 c\n1 a\n2 b\n" },
+        cwd: "/",
+      });
+      const result = await env.exec("sort --key=1n /test.txt");
+      expect(result.stdout).toBe("1 a\n2 b\n3 c\n");
+    });
+  });
 });

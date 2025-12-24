@@ -1,10 +1,6 @@
-import type { AwkContext } from "./types.js";
-import {
-  evaluateExpression,
-  evaluateCondition,
-  evaluateConcatenation,
-} from "./expressions.js";
+import { evaluateCondition, evaluateExpression } from "./expressions.js";
 import { findMatchingBrace } from "./parser.js";
+import type { AwkContext } from "./types.js";
 
 export function executeAwkAction(action: string, ctx: AwkContext): string {
   let output = "";
@@ -511,7 +507,7 @@ function evaluatePrintf(args: string, ctx: AwkContext): string {
         valueIdx++;
         i = j + 1;
       } else if (spec === "d" || spec === "i") {
-        let val = values[valueIdx]
+        const val = values[valueIdx]
           ? Math.floor(Number(evaluateExpression(values[valueIdx], ctx)))
           : 0;
         let valStr = String(val);
@@ -522,7 +518,7 @@ function evaluatePrintf(args: string, ctx: AwkContext): string {
         valueIdx++;
         i = j + 1;
       } else if (spec === "f") {
-        let val = values[valueIdx]
+        const val = values[valueIdx]
           ? Number(evaluateExpression(values[valueIdx], ctx))
           : 0;
         const prec = precision ? parseInt(precision, 10) : 6;

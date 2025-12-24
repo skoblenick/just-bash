@@ -4,7 +4,20 @@ import { hasHelpFlag, showHelp, unknownOption } from "../help.js";
 
 // Format date for ls -l output (e.g., "Jan  1 00:00" or "Jan  1  2024")
 function formatDate(date: Date): string {
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
   const month = months[date.getMonth()];
   const day = String(date.getDate()).padStart(2, " ");
   const now = new Date();
@@ -190,7 +203,9 @@ async function listGlob(
         const size = stat.size ?? 0;
         const mtime = stat.mtime ?? new Date(0);
         const dateStr = formatDate(mtime);
-        lines.push(`${mode} 1 user user ${String(size).padStart(5)} ${dateStr} ${match}${type}`);
+        lines.push(
+          `${mode} 1 user user ${String(size).padStart(5)} ${dateStr} ${match}${type}`,
+        );
       } catch {
         lines.push(`-rw-r--r-- 1 user user     0 Jan  1 00:00 ${match}`);
       }

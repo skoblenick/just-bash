@@ -57,7 +57,7 @@ describe("grep --exclude and --exclude-dir", () => {
         },
       });
       const result = await env.exec(
-        'grep -r --exclude-dir=node_modules hello /project',
+        "grep -r --exclude-dir=node_modules hello /project",
       );
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("src/main.js");
@@ -75,7 +75,7 @@ describe("grep --exclude and --exclude-dir", () => {
         },
       });
       const result = await env.exec(
-        'grep -r --exclude-dir=node_modules --exclude-dir=build hello /project',
+        "grep -r --exclude-dir=node_modules --exclude-dir=build hello /project",
       );
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("src/main.js");
@@ -109,7 +109,9 @@ describe("grep -L (files without match)", () => {
         "/dir/also-no-match.txt": "nothing here",
       },
     });
-    const result = await env.exec("grep -L hello /dir/has-match.txt /dir/no-match.txt /dir/also-no-match.txt");
+    const result = await env.exec(
+      "grep -L hello /dir/has-match.txt /dir/no-match.txt /dir/also-no-match.txt",
+    );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("/dir/no-match.txt\n/dir/also-no-match.txt\n");
   });

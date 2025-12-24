@@ -1,8 +1,8 @@
 import type { Command, CommandContext, ExecResult } from "../../types.js";
 import { hasHelpFlag, showHelp, unknownOption } from "../help.js";
-import type { AwkContext } from "./types.js";
-import { parseAwkProgram } from "./parser.js";
 import { executeAwkAction, matchesPattern } from "./executor.js";
+import { parseAwkProgram } from "./parser.js";
+import type { AwkContext } from "./types.js";
 
 const awkHelp = {
   name: "awk",

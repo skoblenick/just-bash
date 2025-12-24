@@ -29,8 +29,7 @@ const trHelp = {
 
 // POSIX character class definitions
 const POSIX_CLASSES: Record<string, string> = {
-  "[:alnum:]":
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+  "[:alnum:]": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
   "[:alpha:]": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
   "[:blank:]": " \t",
   "[:cntrl:]": Array.from({ length: 32 }, (_, i) => String.fromCharCode(i))

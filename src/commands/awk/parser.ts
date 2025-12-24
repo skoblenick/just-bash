@@ -75,10 +75,7 @@ export function parseAwkProgram(program: string): ParsedProgram {
           }
         } else {
           // Condition only (no action) or just a print expression
-          if (
-            remaining.startsWith("print") ||
-            remaining.startsWith("printf")
-          ) {
+          if (remaining.startsWith("print") || remaining.startsWith("printf")) {
             result.main.push({ pattern: null, action: remaining });
           } else {
             // It's a condition without action - default to print

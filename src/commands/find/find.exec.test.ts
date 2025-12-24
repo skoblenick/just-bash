@@ -82,7 +82,7 @@ describe("find -exec", () => {
           "/dir/file2.txt": "content2",
         },
       });
-      const result = await env.exec('find /dir -type f -exec ls {} +');
+      const result = await env.exec("find /dir -type f -exec ls {} +");
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("file1.txt");
       expect(result.stdout).toContain("file2.txt");
@@ -94,7 +94,9 @@ describe("find -exec", () => {
       const env = new BashEnv({
         files: { "/dir/file.txt": "" },
       });
-      const result = await env.exec('find /dir -name "*.txt" -exec echo {} foo');
+      const result = await env.exec(
+        'find /dir -name "*.txt" -exec echo {} foo',
+      );
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("-exec");
     });

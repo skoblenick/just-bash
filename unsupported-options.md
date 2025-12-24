@@ -293,7 +293,7 @@ This document details the options and behaviors that are **not available** in Ba
 
 ### sed
 
-**Supported:** `-n`, `--quiet`, `-i`, `--in-place`, `-e`, `-E`, `-r`, `--regexp-extended`, substitution (`s/pattern/replacement/[gi]`), delete (`d`), print (`p`), address ranges
+**Supported:** `-n`, `--quiet`, `-i`, `--in-place`, `-e`, `-E`, `-r`, `--regexp-extended`, substitution (`s/pattern/replacement/[gip]`), delete (`d`), print (`p`), address ranges, hold space (`h`, `H`, `g`, `G`, `x`), insert/append/change (`a`, `i`, `c`), next (`n`), quit (`q`)
 
 | Unsupported Option | Description |
 |-------------------|-------------|
@@ -304,27 +304,18 @@ This document details the options and behaviors that are **not available** in Ba
 
 | Command | Description |
 |---------|-------------|
-| `a\` | Append text |
 | `b` | Branch to label |
-| `c\` | Change lines |
-| `g`, `G` | Hold space to pattern space |
-| `h`, `H` | Pattern space to hold space |
-| `i\` | Insert text |
-| `n`, `N` | Next line operations |
-| `q` | Quit |
+| `N` | Append next line to pattern space |
 | `r file` | Read file |
 | `t label` | Conditional branch |
 | `w file` | Write to file |
-| `x` | Exchange spaces |
 | `y` | Transliterate |
 | `:label` | Labels |
 | `=` | Print line number |
 
 **Behavior Differences:**
-- **No hold space** (major sed feature)
 - No branching or labels
 - No file I/O within script
-- Only supports basic `s/d/p` commands with line addressing
 
 ---
 
@@ -350,11 +341,11 @@ This document details the options and behaviors that are **not available** in Ba
 
 ### sort
 
-**Supported:** `-r`, `-n`, `-u`, `-k NUM`, `-t CHAR`, `-f`, `--ignore-case`, `--help`
+**Supported:** `-r`, `-n`, `-u`, `-k KEYDEF`, `-t CHAR`, `-f`, `--ignore-case`, `--help`, complex `-k` syntax (field ranges `-k2,4`, character positions `-k1.3`, per-key modifiers `n/r/f/b`), multiple keys for secondary sorting
 
 | Unsupported Option | Description |
 |-------------------|-------------|
-| `-b` | Ignore leading blanks |
+| `-b` | Ignore leading blanks (global flag; per-key `b` modifier is supported) |
 | `-c` | Check if sorted (no output) |
 | `-d` | Dictionary order |
 | `-g` | General numeric (floating point) |
@@ -364,11 +355,8 @@ This document details the options and behaviors that are **not available** in Ba
 | `-s` | Stable sort |
 | `-R` | Random sort |
 | `-V` | Version sort |
-| Complex `-k` | Field ranges (`-k2,4`), character positions (`-k1.3`), per-field modifiers |
 
 **Behavior Differences:**
-- Key field syntax only supports simple numbers (not ranges or positions)
-- Unique filtering applies to full lines, not key fields
 - Locale-dependent behavior may differ
 
 ---
@@ -731,11 +719,11 @@ This document details the options and behaviors that are **not available** in Ba
 5. **basename/dirname** - Nearly complete
 
 ### Most Limited Implementations
-1. **sed** - No hold space, branching, or advanced commands
-2. **touch** - Only creates files, doesn't update timestamps
-3. **awk** - No user-defined functions, math functions, or I/O redirection
-4. **find** - No permission/ownership filters
-5. **tree** - No file metadata or filtering options
+1. **touch** - Only creates files, doesn't update timestamps
+2. **awk** - No user-defined functions, math functions, or I/O redirection
+3. **find** - No permission/ownership filters
+4. **tree** - No file metadata or filtering options
+5. **sed** - No branching/labels or file I/O within script
 
 ### Common Missing Features Across Commands
 - Interactive prompts (`-i`)
@@ -749,115 +737,76 @@ This document details the options and behaviors that are **not available** in Ba
 
 ## Implementation Priority for Coding Agents
 
-This prioritized list focuses on features most useful for AI coding agents like Claude. Priority is based on:
-- Frequency of use in typical coding workflows
-- Impact on agent capabilities
-- Complexity of implementation
-
-### Priority 1: Critical (High Impact, Frequently Used)
-
-| Feature | Command | Why It Matters | Status |
-|---------|---------|----------------|--------|
-| `-exec` support | `find` | Run commands on found files (format, lint, refactor). Core workflow. | ✅ Done |
-| `--exclude`, `--exclude-dir` | `grep` | Skip `node_modules`, `.git`, `build/` - essential for large codebases | ✅ Done |
-| Control structures (`if/else/for/while`) | `awk` | Parse structured output, process build logs, aggregate data | |
-| Arrays | `awk` | Aggregate data, count occurrences, build reports | |
-| Accept flags | `mv` | Need `-n` (no-clobber) for safe file operations | ✅ Done |
-| `-f` (case-insensitive) | `sort` | Sort filenames, identifiers consistently | ✅ Done |
-| `-L` (files without match) | `grep` | Find files missing imports, licenses, patterns | ✅ Done |
-
-### Priority 2: High (Common Workflows)
-
-| Feature | Command | Why It Matters |
-|---------|---------|----------------|
-| `-mtime`, `-ctime`, `-newer` | `find` | Find recently modified files for incremental operations |
-| `-size` | `find` | Find large files, empty files |
-| `-perm` | `find` | Find files with wrong permissions |
-| String functions (`substr`, `split`, `gsub`) | `awk` | Parse paths, extract components, transform text |
-| Extended regex (`-E`) | `sed` | Modern regex syntax without escaping |
-| Hold space (`h/H/g/G/x`) | `sed` | Multi-line operations, complex transformations |
-| `-p` (preserve) | `cp` | Maintain timestamps when copying source files |
-| `-n` (no-clobber) | `cp` | Safe copying without overwrites |
-| Real file sizes | `ls -l` | Understand actual file sizes, not mock data |
-| `-h` (human-readable) | `ls`, `du` | Quick size assessment |
-| `-i` (case-insensitive) | `uniq` | Dedupe regardless of case |
-| POSIX character classes | `tr` | `[:space:]`, `[:alnum:]` for robust transforms |
-
-### Priority 3: Medium (Useful Enhancements)
-
-| Feature | Command | Why It Matters |
-|---------|---------|----------------|
-| `-delete` | `find` | Clean up files without piping to rm |
-| `-print0` / `-0` | `find`, `xargs` | Handle filenames with spaces safely |
-| `-P` (parallel) | `xargs` | Speed up batch operations |
-| Insert/append (`i\`, `a\`) | `sed` | Add lines to files (headers, imports) |
-| `-c` (complement) | `tr` | Delete everything except certain chars |
-| `-s` (suppress) | `cut` | Skip lines without delimiter |
-| Complex `-k` syntax | `sort` | Sort by field ranges, secondary keys |
-| Real timestamps | `ls -l`, `stat` | See actual modification times |
-| Command execution | `env` | Run with modified PATH, env vars |
-| `-f`, `-F` (follow) | `tail` | Monitor logs (limited use in simulated env) |
-
-### Priority 4: Lower (Nice to Have)
-
-| Feature | Command | Why It Matters |
-|---------|---------|----------------|
-| `-v` (verbose) | Most commands | Debugging, understanding operations |
-| `--color` | `grep`, `ls` | Visual clarity (agents don't need this) |
-| `-b` (backup) | `cp`, `mv` | Safety net (agents can implement differently) |
-| User functions | `awk` | Reusable logic (workaround: multiple awk calls) |
-| Branching (`b`, `t`, `:label`) | `sed` | Complex scripts (workaround: multiple sed calls) |
-| `-r` (reverse) | `tail` | Display file in reverse |
-| Math functions | `awk` | Scientific computing (rare in coding tasks) |
-
-### Quick Wins (Easy to Implement)
-
-These have high value-to-effort ratio:
-
-| Feature | Command | Effort | Impact | Status |
-|---------|---------|--------|--------|--------|
-| Accept flags (even if ignored) | `mv` | Low | High - stops errors | ✅ Done |
-| `-f` case-insensitive | `sort` | Low | Medium | ✅ Done |
-| `-i` case-insensitive | `uniq` | Low | Medium | ✅ Done |
-| `-L` files without match | `grep` | Low | High | ✅ Done |
-| `--exclude` patterns | `grep` | Medium | Very High | ✅ Done |
-| `-n` no-clobber | `cp`, `mv` | Low | Medium | ✅ Done |
-| Real file sizes | `ls -l` | Medium | High | ✅ Done |
-| `-E` extended regex | `sed` | Low | Medium | ✅ Done |
+This prioritized list focuses on features most useful for AI coding agents like Claude. All critical features (Priority 1) have been implemented. ✅
 
 ### Recommended Implementation Order
 
-**Phase 1: Unblock Core Workflows** ✅ COMPLETED
-1. [x] `mv` - Accept basic flags (`-f`, `-n`, `-v`)
-2. [x] `grep --exclude`, `--exclude-dir`
-3. [x] `grep -L` (files without matches)
-4. [x] `find -exec {} \;` and `-exec {} +`
-5. [x] `sort -f` (case-insensitive)
+<details>
+<summary>Completed Phases 1-5 (click to expand)</summary>
 
-**Phase 2: Enhanced Text Processing** ✅ COMPLETED
-6. [x] `awk` control structures (`if/else/for/while`)
-7. [x] `awk` arrays (associative)
-8. [x] `awk` string functions (`length`, `substr`, `split`, `gsub`, `tolower`, `toupper`, `sprintf`)
-9. [x] `sed -E` (extended regex)
-10. [x] `tr` POSIX character classes
+**Phase 1: Unblock Core Workflows** ✅
+- `mv` flags (`-f`, `-n`, `-v`)
+- `grep --exclude`, `--exclude-dir`, `-L`
+- `find -exec {} \;` and `-exec {} +`
+- `sort -f` (case-insensitive)
 
-**Phase 3: File Operations** ✅ COMPLETED
-11. [x] `cp -p` (preserve timestamps)
-12. [x] `cp -n` (no-clobber)
-13. [x] `find -mtime`, `-newer`
-14. [x] `find -size`
-15. [x] `ls -l` real file sizes and timestamps
+**Phase 2: Enhanced Text Processing** ✅
+- `awk` control structures, arrays, string functions
+- `sed -E` (extended regex)
+- `tr` POSIX character classes
 
-**Phase 4: Advanced Features** ✅ COMPLETED
-16. [x] `find -print0` + `xargs -0`
-17. [x] `xargs -P` (parallel)
-18. [ ] `sed` hold space commands (deferred - complex refactor)
-19. [ ] `sed` insert/append (`i\`, `a\`) (deferred - complex refactor)
-20. [x] `find -delete`
-21. [x] `env` command execution
+**Phase 3: File Operations** ✅
+- `cp -p`, `-n`
+- `find -mtime`, `-newer`, `-size`
+- `ls -l` real file sizes and timestamps
 
-**Phase 5: Polish** ✅ COMPLETED
-22. [x] `uniq -i` (case-insensitive)
-23. [x] `cut -s` (suppress lines without delimiter)
-24. [ ] `sort` complex `-k` syntax (deferred)
-25. [x] `awk` `next`, `exit` statements (partial)
+**Phase 4: Advanced Features** ✅
+- `find -print0`, `-delete` + `xargs -0`, `-P`
+- `sed` hold space (`h/H/g/G/x`), insert/append/change (`a/i/c`), quit (`q`)
+- `env` command execution
+
+**Phase 5: Polish** ✅
+- `uniq -i`, `cut -s`
+- `sort` complex `-k` syntax
+- `awk` `next`, `exit`
+
+</details>
+
+**Phase 6: Advanced Text Processing**
+
+| # | Feature | Command | Why It Matters |
+|---|---------|---------|----------------|
+| 1 | `N` append next line | `sed` | Multi-line pattern matching, joining lines |
+| 2 | `y` transliterate | `sed` | Character-by-character translation (like `tr`) |
+| 3 | `-c` complement | `tr` | Delete everything except certain chars |
+| 4 | User-defined functions | `awk` | Reusable logic in complex scripts |
+| 5 | Math functions | `awk` | `sin`, `cos`, `sqrt`, `rand` for calculations |
+
+**Phase 7: Security & Metadata**
+
+| # | Feature | Command | Why It Matters |
+|---|---------|---------|----------------|
+| 6 | `-perm` permission filter | `find` | Find files with specific permissions |
+| 7 | `-user`, `-group` | `find` | Find files by owner |
+| 8 | `-atime`, `-ctime` | `find` | Access/change time filtering |
+| 9 | `-h` human-readable sizes | `ls`, `du` | Quick size assessment |
+
+**Phase 8: Advanced Scripting**
+
+| # | Feature | Command | Why It Matters |
+|---|---------|---------|----------------|
+| 10 | Branching (`b`, `t`, `:label`) | `sed` | Complex conditional scripts |
+| 11 | `=` print line number | `sed` | Debugging, line counting |
+| 12 | `-f file` read script | `sed` | External script files |
+| 13 | Pattern ranges `/start/,/end/` | `awk` | Process sections of files |
+| 14 | `getline` | `awk` | Read from files/pipes within awk |
+
+**Phase 9: Nice to Have**
+
+| # | Feature | Command | Why It Matters |
+|---|---------|---------|----------------|
+| 15 | `-f` follow mode | `tail` | Monitor logs (limited use in simulated env) |
+| 16 | `-r` reverse | `tail` | Display file in reverse |
+| 17 | `--color` | `grep`, `ls` | Visual clarity |
+| 18 | `-v` verbose | Most commands | Debugging output |
+| 19 | `-b` backup | `cp`, `mv` | Safety net for overwrites |

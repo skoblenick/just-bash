@@ -1,15 +1,15 @@
-import type { AwkContext } from "./types.js";
 import {
-  awkLength,
-  awkSubstr,
-  awkIndex,
-  awkSplit,
-  awkSub,
   awkGsub,
+  awkIndex,
+  awkLength,
+  awkSplit,
+  awkSprintf,
+  awkSub,
+  awkSubstr,
   awkTolower,
   awkToupper,
-  awkSprintf,
 } from "./functions.js";
+import type { AwkContext } from "./types.js";
 
 export function evaluateExpression(
   expr: string,
@@ -292,7 +292,9 @@ export function evaluateCondition(condition: string, ctx: AwkContext): boolean {
   if (inMatch) {
     const key = String(evaluateExpression(inMatch[1].trim(), ctx));
     const arrayName = inMatch[2];
-    return !!(ctx.arrays[arrayName] && ctx.arrays[arrayName][key] !== undefined);
+    return !!(
+      ctx.arrays[arrayName] && ctx.arrays[arrayName][key] !== undefined
+    );
   }
 
   // NR comparisons
@@ -308,8 +310,7 @@ export function evaluateCondition(condition: string, ctx: AwkContext): boolean {
   if (fieldRegex) {
     const fieldNum = parseInt(fieldRegex[1], 10);
     const pattern = fieldRegex[2];
-    const fieldVal =
-      fieldNum === 0 ? ctx.line : ctx.fields[fieldNum - 1] || "";
+    const fieldVal = fieldNum === 0 ? ctx.line : ctx.fields[fieldNum - 1] || "";
     return new RegExp(pattern).test(fieldVal);
   }
 
@@ -318,8 +319,7 @@ export function evaluateCondition(condition: string, ctx: AwkContext): boolean {
   if (fieldNotRegex) {
     const fieldNum = parseInt(fieldNotRegex[1], 10);
     const pattern = fieldNotRegex[2];
-    const fieldVal =
-      fieldNum === 0 ? ctx.line : ctx.fields[fieldNum - 1] || "";
+    const fieldVal = fieldNum === 0 ? ctx.line : ctx.fields[fieldNum - 1] || "";
     return !new RegExp(pattern).test(fieldVal);
   }
 

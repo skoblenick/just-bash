@@ -190,9 +190,7 @@ export function awkSprintf(
 
       const spec = format[j];
       if (spec === "s" || spec === "d" || spec === "i" || spec === "f") {
-        const val = values[valueIdx]
-          ? evaluateExpr(values[valueIdx], ctx)
-          : "";
+        const val = values[valueIdx] ? evaluateExpr(values[valueIdx], ctx) : "";
         result += String(val);
         valueIdx++;
         i = j + 1;

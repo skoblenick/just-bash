@@ -1,42 +1,6 @@
-import { aliasCommand, unaliasCommand } from "./commands/alias/alias.js";
-import { awkCommand } from "./commands/awk/awk.js";
-import { basenameCommand } from "./commands/basename/basename.js";
-import { bashCommand, shCommand } from "./commands/bash/bash.js";
-import { catCommand } from "./commands/cat/cat.js";
-import { chmodCommand } from "./commands/chmod/chmod.js";
-import { clearCommand } from "./commands/clear/clear.js";
-import { cpCommand } from "./commands/cp/cp.js";
-import { cutCommand } from "./commands/cut/cut.js";
-import { dirnameCommand } from "./commands/dirname/dirname.js";
-import { duCommand } from "./commands/du/du.js";
-// Import commands
-import { echoCommand } from "./commands/echo/echo.js";
-import { envCommand, printenvCommand } from "./commands/env/env.js";
-import { findCommand } from "./commands/find/find.js";
-import { grepCommand } from "./commands/grep/grep.js";
-import { headCommand } from "./commands/head/head.js";
-import { historyCommand } from "./commands/history/history.js";
-import { lnCommand } from "./commands/ln/ln.js";
-import { lsCommand } from "./commands/ls/ls.js";
-import { mkdirCommand } from "./commands/mkdir/mkdir.js";
-import { mvCommand } from "./commands/mv/mv.js";
-import { printfCommand } from "./commands/printf/printf.js";
-import { pwdCommand } from "./commands/pwd/pwd.js";
-import { readlinkCommand } from "./commands/readlink/readlink.js";
-import { rmCommand } from "./commands/rm/rm.js";
-import { sedCommand } from "./commands/sed/sed.js";
-import { sortCommand } from "./commands/sort/sort.js";
-import { statCommand } from "./commands/stat/stat.js";
-import { tailCommand } from "./commands/tail/tail.js";
-import { teeCommand } from "./commands/tee/tee.js";
-import { touchCommand } from "./commands/touch/touch.js";
-import { trCommand } from "./commands/tr/tr.js";
-import { treeCommand } from "./commands/tree/tree.js";
-import { falseCommand, trueCommand } from "./commands/true/true.js";
-import { uniqCommand } from "./commands/uniq/uniq.js";
-import { wcCommand } from "./commands/wc/wc.js";
-import { xargsCommand } from "./commands/xargs/xargs.js";
+import { createLazyCommands } from "./commands/registry.js";
 import { type IFileSystem, VirtualFs } from "./fs.js";
+import type { FileContent } from "./fs-interface.js";
 import {
   GlobExpander,
   type Pipeline,
@@ -60,7 +24,7 @@ export interface BashEnvOptions {
    * Initial files to populate the virtual filesystem.
    * Only used when fs is not provided.
    */
-  files?: Record<string, string>;
+  files?: Record<string, FileContent>;
   /**
    * Environment variables
    */
@@ -90,7 +54,7 @@ export interface BashEnvOptions {
 }
 
 export class BashEnv {
-  private fs: IFileSystem;
+  readonly fs: IFileSystem;
   private cwd: string;
   private env: Record<string, string>;
   private commands: CommandRegistry = new Map();
@@ -150,48 +114,11 @@ export class BashEnv {
       }
     }
 
-    // Register built-in commands
-    this.registerCommand(echoCommand);
-    this.registerCommand(catCommand);
-    this.registerCommand(lsCommand);
-    this.registerCommand(mkdirCommand);
-    this.registerCommand(pwdCommand);
-    this.registerCommand(touchCommand);
-    this.registerCommand(rmCommand);
-    this.registerCommand(cpCommand);
-    this.registerCommand(mvCommand);
-    this.registerCommand(headCommand);
-    this.registerCommand(tailCommand);
-    this.registerCommand(wcCommand);
-    this.registerCommand(grepCommand);
-    this.registerCommand(sortCommand);
-    this.registerCommand(uniqCommand);
-    this.registerCommand(findCommand);
-    this.registerCommand(sedCommand);
-    this.registerCommand(cutCommand);
-    this.registerCommand(trCommand);
-    this.registerCommand(trueCommand);
-    this.registerCommand(falseCommand);
-    this.registerCommand(basenameCommand);
-    this.registerCommand(dirnameCommand);
-    this.registerCommand(teeCommand);
-    this.registerCommand(xargsCommand);
-    this.registerCommand(envCommand);
-    this.registerCommand(printenvCommand);
-    this.registerCommand(treeCommand);
-    this.registerCommand(statCommand);
-    this.registerCommand(duCommand);
-    this.registerCommand(awkCommand);
-    this.registerCommand(chmodCommand);
-    this.registerCommand(clearCommand);
-    this.registerCommand(aliasCommand);
-    this.registerCommand(unaliasCommand);
-    this.registerCommand(historyCommand);
-    this.registerCommand(lnCommand);
-    this.registerCommand(readlinkCommand);
-    this.registerCommand(printfCommand);
-    this.registerCommand(bashCommand);
-    this.registerCommand(shCommand);
+    // Register built-in commands with lazy loading
+    // Commands are registered eagerly but implementations load on first use
+    for (const cmd of createLazyCommands()) {
+      this.registerCommand(cmd);
+    }
   }
 
   registerCommand(command: Command): void {

@@ -195,3 +195,6 @@ xargs — build argument lists
 ## Implementation phase 12
 
 - Lazy load commands via dynamic import
+  - Command should be eagerly registered
+  - But their implementations should only be loaded when they are actually called
+- Make sure that files support Buffers and encoding

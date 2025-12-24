@@ -1,5 +1,8 @@
 import type { Command, CommandContext, ExecResult } from "../../types.js";
 import { hasHelpFlag, showHelp, unknownOption } from "../help.js";
+import { createComparator, filterUnique } from "./comparator.js";
+import { parseKeySpec } from "./parser.js";
+import type { SortOptions } from "./types.js";
 
 const sortHelp = {
   name: "sort",
@@ -10,10 +13,21 @@ const sortHelp = {
     "-n, --numeric-sort   compare according to string numerical value",
     "-r, --reverse        reverse the result of comparisons",
     "-u, --unique         output only unique lines",
-    "-k, --key=POS        sort via a key at field POS",
+    "-k, --key=KEYDEF     sort via a key; KEYDEF gives location and type",
     "-t, --field-separator=SEP  use SEP as field separator",
     "    --help           display this help and exit",
   ],
+  description: `KEYDEF is F[.C][OPTS][,F[.C][OPTS]]
+  F is a field number (1-indexed)
+  C is a character position within the field (1-indexed)
+  OPTS can be: n (numeric), r (reverse), f (fold case), b (ignore blanks)
+
+Examples:
+  -k1        sort by first field
+  -k2,2      sort by second field only
+  -k1.3      sort by first field starting at 3rd character
+  -k1,2n     sort by fields 1-2 numerically
+  -k2 -k1    sort by field 2, then by field 1`,
 };
 
 export const sortCommand: Command = {
@@ -23,52 +37,68 @@ export const sortCommand: Command = {
       return showHelp(sortHelp);
     }
 
-    let reverse = false;
-    let numeric = false;
-    let unique = false;
-    let ignoreCase = false;
-    let keyField: number | null = null;
-    let fieldDelimiter: string | null = null;
+    const options: SortOptions = {
+      reverse: false,
+      numeric: false,
+      unique: false,
+      ignoreCase: false,
+      keys: [],
+      fieldDelimiter: null,
+    };
     const files: string[] = [];
 
     // Parse arguments
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
       if (arg === "-r" || arg === "--reverse") {
-        reverse = true;
+        options.reverse = true;
       } else if (arg === "-n" || arg === "--numeric-sort") {
-        numeric = true;
+        options.numeric = true;
       } else if (arg === "-u" || arg === "--unique") {
-        unique = true;
+        options.unique = true;
       } else if (arg === "-f" || arg === "--ignore-case") {
-        ignoreCase = true;
+        options.ignoreCase = true;
       } else if (arg === "-t" || arg === "--field-separator") {
-        fieldDelimiter = args[++i] || null;
+        options.fieldDelimiter = args[++i] || null;
       } else if (arg.startsWith("-t")) {
-        fieldDelimiter = arg.slice(2) || null;
+        options.fieldDelimiter = arg.slice(2) || null;
+      } else if (arg.startsWith("--field-separator=")) {
+        options.fieldDelimiter = arg.slice(18) || null;
       } else if (arg === "-k" || arg === "--key") {
         const keyArg = args[++i];
         if (keyArg) {
-          const keyNum = parseInt(keyArg, 10);
-          if (!Number.isNaN(keyNum) && keyNum >= 1) {
-            keyField = keyNum;
+          const keySpec = parseKeySpec(keyArg);
+          if (keySpec) {
+            options.keys.push(keySpec);
           }
         }
       } else if (arg.startsWith("-k")) {
-        const keyNum = parseInt(arg.slice(2), 10);
-        if (!Number.isNaN(keyNum) && keyNum >= 1) {
-          keyField = keyNum;
+        const keySpec = parseKeySpec(arg.slice(2));
+        if (keySpec) {
+          options.keys.push(keySpec);
+        }
+      } else if (arg.startsWith("--key=")) {
+        const keySpec = parseKeySpec(arg.slice(6));
+        if (keySpec) {
+          options.keys.push(keySpec);
         }
       } else if (arg.startsWith("--")) {
         return unknownOption("sort", arg);
       } else if (arg.startsWith("-") && !arg.startsWith("--")) {
         // Handle combined flags like -rn
+        let hasUnknown = false;
         for (const char of arg.slice(1)) {
-          if (char === "r") reverse = true;
-          else if (char === "n") numeric = true;
-          else if (char === "u") unique = true;
-          else if (char === "f") ignoreCase = true;
-          else return unknownOption("sort", `-${char}`);
+          if (char === "r") options.reverse = true;
+          else if (char === "n") options.numeric = true;
+          else if (char === "u") options.unique = true;
+          else if (char === "f") options.ignoreCase = true;
+          else {
+            hasUnknown = true;
+            break;
+          }
+        }
+        if (hasUnknown) {
+          return unknownOption("sort", arg);
         }
       } else {
         files.push(arg);
@@ -103,53 +133,13 @@ export const sortCommand: Command = {
       lines.pop();
     }
 
-    // Sort lines
-    lines.sort((a, b) => {
-      let valA = a;
-      let valB = b;
-
-      // Extract key field if specified
-      if (keyField !== null) {
-        const splitPattern = fieldDelimiter !== null ? fieldDelimiter : /\s+/;
-        const partsA = a.split(splitPattern);
-        const partsB = b.split(splitPattern);
-        valA = partsA[keyField - 1] || "";
-        valB = partsB[keyField - 1] || "";
-      }
-
-      // Apply case folding if -f is specified
-      if (ignoreCase) {
-        valA = valA.toLowerCase();
-        valB = valB.toLowerCase();
-      }
-
-      if (numeric) {
-        const numA = parseFloat(valA) || 0;
-        const numB = parseFloat(valB) || 0;
-        return numA - numB;
-      }
-
-      return valA.localeCompare(valB);
-    });
-
-    if (reverse) {
-      lines.reverse();
-    }
+    // Sort lines using the comparator
+    const comparator = createComparator(options);
+    lines.sort(comparator);
 
     // Remove duplicates if -u
-    if (unique) {
-      if (ignoreCase) {
-        // Case-insensitive uniqueness
-        const seen = new Set<string>();
-        lines = lines.filter((line) => {
-          const key = line.toLowerCase();
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-      } else {
-        lines = [...new Set(lines)];
-      }
+    if (options.unique) {
+      lines = filterUnique(lines, options);
     }
 
     const output = lines.length > 0 ? `${lines.join("\n")}\n` : "";

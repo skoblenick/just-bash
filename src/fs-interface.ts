@@ -1,9 +1,40 @@
 /**
+ * Supported buffer encodings
+ */
+export type BufferEncoding =
+  | "utf8"
+  | "utf-8"
+  | "ascii"
+  | "binary"
+  | "base64"
+  | "hex"
+  | "latin1";
+
+/**
+ * File content can be string or Buffer
+ */
+export type FileContent = string | Uint8Array;
+
+/**
+ * Options for reading files
+ */
+export interface ReadFileOptions {
+  encoding?: BufferEncoding | null;
+}
+
+/**
+ * Options for writing files
+ */
+export interface WriteFileOptions {
+  encoding?: BufferEncoding;
+}
+
+/**
  * File system entry types
  */
 export interface FileEntry {
   type: "file";
-  content: string;
+  content: string | Uint8Array;
   mode: number;
   mtime: Date;
 }
@@ -66,20 +97,37 @@ export interface CpOptions {
  */
 export interface IFileSystem {
   /**
-   * Read the contents of a file
+   * Read the contents of a file as a string (default: utf8)
    * @throws Error if file doesn't exist or is a directory
    */
-  readFile(path: string): Promise<string>;
+  readFile(
+    path: string,
+    options?: ReadFileOptions | BufferEncoding,
+  ): Promise<string>;
+
+  /**
+   * Read the contents of a file as a Uint8Array (binary)
+   * @throws Error if file doesn't exist or is a directory
+   */
+  readFileBuffer(path: string): Promise<Uint8Array>;
 
   /**
    * Write content to a file, creating it if it doesn't exist
    */
-  writeFile(path: string, content: string): Promise<void>;
+  writeFile(
+    path: string,
+    content: FileContent,
+    options?: WriteFileOptions | BufferEncoding,
+  ): Promise<void>;
 
   /**
    * Append content to a file, creating it if it doesn't exist
    */
-  appendFile(path: string, content: string): Promise<void>;
+  appendFile(
+    path: string,
+    content: FileContent,
+    options?: WriteFileOptions | BufferEncoding,
+  ): Promise<void>;
 
   /**
    * Check if a path exists
@@ -172,5 +220,5 @@ export interface IFileSystem {
  * Factory function type for creating filesystem instances
  */
 export type FileSystemFactory = (
-  initialFiles?: Record<string, string>,
+  initialFiles?: Record<string, FileContent>,
 ) => IFileSystem;
