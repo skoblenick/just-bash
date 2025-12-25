@@ -25,11 +25,7 @@ describe("export command - Real Bash Comparison", () => {
 
     it("should set multiple variables", async () => {
       const env = await setupFiles(testDir, {});
-      await compareOutputs(
-        env,
-        testDir,
-        "export A=1 B=2 C=3; echo $A $B $C",
-      );
+      await compareOutputs(env, testDir, "export A=1 B=2 C=3; echo $A $B $C");
     });
 
     it("should handle value with equals sign", async () => {
@@ -43,7 +39,7 @@ describe("export command - Real Bash Comparison", () => {
 
     it("should handle empty value", async () => {
       const env = await setupFiles(testDir, {});
-      await compareOutputs(env, testDir, "export EMPTY=; echo \"[$EMPTY]\"");
+      await compareOutputs(env, testDir, 'export EMPTY=; echo "[$EMPTY]"');
     });
   });
 
@@ -76,7 +72,7 @@ describe("export command - Real Bash Comparison", () => {
       await compareOutputs(
         env,
         testDir,
-        "export NAME=world; echo \"hello $NAME\"",
+        'export NAME=world; echo "hello $NAME"',
       );
     });
   });
@@ -84,11 +80,7 @@ describe("export command - Real Bash Comparison", () => {
   describe("inline export", () => {
     it("should allow setting and using in same line", async () => {
       const env = await setupFiles(testDir, {});
-      await compareOutputs(
-        env,
-        testDir,
-        "export X=42 && echo $X",
-      );
+      await compareOutputs(env, testDir, "export X=42 && echo $X");
     });
   });
 });

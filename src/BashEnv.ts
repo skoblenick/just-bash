@@ -27,12 +27,7 @@ import {
   type SecureFetch,
 } from "./network/index.js";
 import { type ParseException, parse } from "./parser/parser.js";
-import type {
-  BashExecResult,
-  Command,
-  CommandRegistry,
-  ExecResult,
-} from "./types.js";
+import type { BashExecResult, Command, CommandRegistry } from "./types.js";
 
 // Default protection limits
 const DEFAULT_MAX_CALL_DEPTH = 100;

@@ -76,7 +76,9 @@ describe("unalias command", () => {
 
   it("should remove all aliases with -a", async () => {
     const env = new BashEnv();
-    const result = await env.exec("alias ll='ls -la' la='ls -a'; unalias -a; alias");
+    const result = await env.exec(
+      "alias ll='ls -la' la='ls -a'; unalias -a; alias",
+    );
     expect(result.stdout).toBe("");
     expect(result.exitCode).toBe(0);
   });

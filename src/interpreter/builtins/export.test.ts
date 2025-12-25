@@ -25,7 +25,9 @@ describe("export builtin", () => {
 
     it("should create empty variable when NAME has no value", async () => {
       const env = new BashEnv();
-      const result = await env.exec('export EMPTY; test -z "$EMPTY" && echo empty');
+      const result = await env.exec(
+        'export EMPTY; test -z "$EMPTY" && echo empty',
+      );
       expect(result.stdout).toBe("empty\n");
     });
 
@@ -60,7 +62,7 @@ describe("export builtin", () => {
 
     it("should list newly exported variables within same exec", async () => {
       const env = new BashEnv();
-      const result = await env.exec("export MSG=\"it's working\"; export");
+      const result = await env.exec('export MSG="it\'s working"; export');
       expect(result.stdout).toContain("it'\\''s working");
     });
 
@@ -75,7 +77,9 @@ describe("export builtin", () => {
   describe("un-exporting with -n", () => {
     it("should remove variable with -n (within same exec)", async () => {
       const env = new BashEnv({ env: { FOO: "bar" } });
-      const result = await env.exec('export -n FOO; test -z "$FOO" && echo removed');
+      const result = await env.exec(
+        'export -n FOO; test -z "$FOO" && echo removed',
+      );
       expect(result.stdout).toBe("removed\n");
     });
 
@@ -91,7 +95,9 @@ describe("export builtin", () => {
   describe("variable usage", () => {
     it("exported variable should be available in same exec", async () => {
       const env = new BashEnv();
-      const result = await env.exec("export GREETING=hello; echo $GREETING world");
+      const result = await env.exec(
+        "export GREETING=hello; echo $GREETING world",
+      );
       expect(result.stdout).toBe("hello world\n");
     });
 
@@ -103,7 +109,9 @@ describe("export builtin", () => {
 
     it("should work with conditional", async () => {
       const env = new BashEnv();
-      const result = await env.exec('export DEBUG=1; [ "$DEBUG" = "1" ] && echo debug_on');
+      const result = await env.exec(
+        'export DEBUG=1; [ "$DEBUG" = "1" ] && echo debug_on',
+      );
       expect(result.stdout).toBe("debug_on\n");
     });
 

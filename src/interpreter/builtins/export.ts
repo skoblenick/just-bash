@@ -24,11 +24,7 @@ export function handleExport(
     if (arg === "-n") {
       unexport = true;
     } else if (arg === "-p") {
-      // -p is same as no args, just list
-      continue;
     } else if (arg === "--") {
-      // End of options
-      continue;
     } else {
       processedArgs.push(arg);
     }
