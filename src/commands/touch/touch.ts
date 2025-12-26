@@ -1,3 +1,4 @@
+import { getErrorMessage } from "../../interpreter/helpers/errors.js";
 import type { Command, CommandContext, ExecResult } from "../../types.js";
 import { unknownOption } from "../help.js";
 
@@ -39,8 +40,7 @@ export const touchCommand: Command = {
         }
         // If exists, we'd update timestamp but our FS doesn't track that
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        stderr += `touch: cannot touch '${file}': ${message}\n`;
+        stderr += `touch: cannot touch '${file}': ${getErrorMessage(error)}\n`;
         exitCode = 1;
       }
     }

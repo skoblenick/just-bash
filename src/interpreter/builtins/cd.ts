@@ -3,6 +3,7 @@
  */
 
 import type { ExecResult } from "../../types.js";
+import { failure, success } from "../helpers/result.js";
 import type { InterpreterContext } from "../types.js";
 
 export async function handleCd(
@@ -10,40 +11,105 @@ export async function handleCd(
   args: string[],
 ): Promise<ExecResult> {
   let target: string;
+  let printPath = false;
+  let _physical = false;
 
-  if (args.length === 0 || args[0] === "~") {
+  // Parse options
+  let i = 0;
+  while (i < args.length) {
+    if (args[i] === "--") {
+      // End of options
+      i++;
+      break;
+    } else if (args[i] === "-L") {
+      _physical = false;
+      i++;
+    } else if (args[i] === "-P") {
+      _physical = true;
+      i++;
+    } else if (args[i].startsWith("-") && args[i] !== "-") {
+      // Unknown option - ignore for now
+      i++;
+    } else {
+      break;
+    }
+  }
+
+  // Get the target directory
+  const remainingArgs = args.slice(i);
+  if (remainingArgs.length === 0) {
     target = ctx.state.env.HOME || "/";
-  } else if (args[0] === "-") {
+  } else if (remainingArgs[0] === "~") {
+    target = ctx.state.env.HOME || "/";
+  } else if (remainingArgs[0] === "-") {
     target = ctx.state.previousDir;
+    printPath = true; // cd - prints the new directory
   } else {
-    target = args[0];
+    target = remainingArgs[0];
   }
 
-  const newDir = ctx.fs.resolvePath(ctx.state.cwd, target);
-
-  try {
-    const statResult = await ctx.fs.stat(newDir);
-    if (!statResult.isDirectory) {
-      return {
-        stdout: "",
-        stderr: `bash: cd: ${target}: Not a directory\n`,
-        exitCode: 1,
-      };
-    }
-  } catch {
-    if (newDir !== "/") {
-      return {
-        stdout: "",
-        stderr: `bash: cd: ${target}: No such file or directory\n`,
-        exitCode: 1,
-      };
+  // CDPATH support: if target doesn't start with / or ., search CDPATH directories
+  // CDPATH is only used for relative paths that don't start with .
+  if (
+    !target.startsWith("/") &&
+    !target.startsWith("./") &&
+    !target.startsWith("../") &&
+    target !== "." &&
+    target !== ".."
+  ) {
+    const cdpath = ctx.state.env.CDPATH;
+    if (cdpath) {
+      const cdpathDirs = cdpath.split(":").filter((d) => d);
+      for (const dir of cdpathDirs) {
+        const candidate = dir.startsWith("/")
+          ? `${dir}/${target}`
+          : `${ctx.state.cwd}/${dir}/${target}`;
+        try {
+          const stat = await ctx.fs.stat(candidate);
+          if (stat.isDirectory) {
+            // Found in CDPATH - use this path and print it
+            target = candidate;
+            printPath = true;
+            break;
+          }
+        } catch {
+          // Directory doesn't exist in this CDPATH entry, continue
+        }
+      }
     }
   }
+
+  // Check path components before normalization to catch cases like "nonexistent/.."
+  // where the intermediate directory doesn't exist
+  const pathToCheck = target.startsWith("/")
+    ? target
+    : `${ctx.state.cwd}/${target}`;
+  const parts = pathToCheck.split("/").filter((p) => p && p !== ".");
+  let currentPath = "";
+  for (const part of parts) {
+    if (part === "..") {
+      // Go up one level
+      currentPath = currentPath.split("/").slice(0, -1).join("/") || "/";
+    } else {
+      currentPath = currentPath ? `${currentPath}/${part}` : `/${part}`;
+      try {
+        const stat = await ctx.fs.stat(currentPath);
+        if (!stat.isDirectory) {
+          return failure(`bash: cd: ${target}: Not a directory\n`);
+        }
+      } catch {
+        return failure(`bash: cd: ${target}: No such file or directory\n`);
+      }
+    }
+  }
+
+  const newDir = currentPath || "/";
 
   ctx.state.previousDir = ctx.state.cwd;
   ctx.state.cwd = newDir;
   ctx.state.env.PWD = ctx.state.cwd;
   ctx.state.env.OLDPWD = ctx.state.previousDir;
 
-  return { stdout: "", stderr: "", exitCode: 0 };
+  // cd - prints the new directory
+  return success(printPath ? `${newDir}\n` : "");
 }

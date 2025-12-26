@@ -1,3 +1,4 @@
+import { getErrorMessage } from "../../interpreter/helpers/errors.js";
 import type { Command, CommandContext, ExecResult } from "../../types.js";
 import { unknownOption } from "../help.js";
 
@@ -48,7 +49,7 @@ export const mkdirCommand: Command = {
           stdout += `mkdir: created directory '${dir}'\n`;
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = getErrorMessage(error);
         if (message.includes("ENOENT") || message.includes("no such file")) {
           stderr += `mkdir: cannot create directory '${dir}': No such file or directory\n`;
         } else if (

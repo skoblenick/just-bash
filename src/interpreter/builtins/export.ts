@@ -10,6 +10,7 @@
  */
 
 import type { ExecResult } from "../../types.js";
+import { OK, result, success } from "../helpers/result.js";
 import type { InterpreterContext } from "../types.js";
 
 export function handleExport(
@@ -42,7 +43,7 @@ export function handleExport(
       const escapedValue = value.replace(/'/g, "'\\''");
       stdout += `declare -x ${name}='${escapedValue}'\n`;
     }
-    return { stdout, stderr: "", exitCode: 0 };
+    return success(stdout);
   }
 
   // Handle un-export
@@ -52,26 +53,44 @@ export function handleExport(
       const name = arg.split("=")[0];
       delete ctx.state.env[name];
     }
-    return { stdout: "", stderr: "", exitCode: 0 };
+    return OK;
   }
 
   // Process each argument
+  let stderr = "";
+  let exitCode = 0;
+
   for (const arg of processedArgs) {
+    let name: string;
+    let value: string | undefined;
+
     if (arg.includes("=")) {
       // export NAME=value
       const eqIdx = arg.indexOf("=");
-      const name = arg.slice(0, eqIdx);
-      const value = arg.slice(eqIdx + 1);
-      ctx.state.env[name] = value;
+      name = arg.slice(0, eqIdx);
+      value = arg.slice(eqIdx + 1);
     } else {
       // export NAME (without value)
+      name = arg;
+    }
+
+    // Validate variable name: must start with letter/underscore, contain only alphanumeric/_
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+      stderr += `bash: export: \`${arg}': not a valid identifier\n`;
+      exitCode = 1;
+      continue;
+    }
+
+    if (value !== undefined) {
+      ctx.state.env[name] = value;
+    } else {
       // If variable doesn't exist, create it as empty
-      if (!(arg in ctx.state.env)) {
-        ctx.state.env[arg] = "";
+      if (!(name in ctx.state.env)) {
+        ctx.state.env[name] = "";
       }
       // If it exists, it's already "exported" in our model
     }
   }
 
-  return { stdout: "", stderr: "", exitCode: 0 };
+  return result("", stderr, exitCode);
 }

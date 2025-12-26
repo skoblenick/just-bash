@@ -30,11 +30,14 @@ export type CommandName =
   | "wc"
   | "stat"
   | "grep"
+  | "fgrep"
+  | "egrep"
   | "sed"
   | "awk"
   | "sort"
   | "uniq"
   | "cut"
+  | "paste"
   | "tr"
   | "tee"
   | "find"
@@ -58,6 +61,9 @@ export type CommandName =
   | "diff"
   | "date"
   | "sleep"
+  | "timeout"
+  | "seq"
+  | "expr"
   | "html-to-markdown"
   | "help";
 
@@ -151,6 +157,14 @@ const commandLoaders: LazyCommandDef<CommandName>[] = [
     load: async () => (await import("./grep/grep.js")).grepCommand,
   },
   {
+    name: "fgrep",
+    load: async () => (await import("./grep/grep.js")).fgrepCommand,
+  },
+  {
+    name: "egrep",
+    load: async () => (await import("./grep/grep.js")).egrepCommand,
+  },
+  {
     name: "sed",
     load: async () => (await import("./sed/sed.js")).sedCommand,
   },
@@ -169,6 +183,10 @@ const commandLoaders: LazyCommandDef<CommandName>[] = [
   {
     name: "cut",
     load: async () => (await import("./cut/cut.js")).cutCommand,
+  },
+  {
+    name: "paste",
+    load: async () => (await import("./paste/paste.js")).pasteCommand,
   },
   {
     name: "tr",
@@ -275,6 +293,18 @@ const commandLoaders: LazyCommandDef<CommandName>[] = [
   {
     name: "sleep",
     load: async () => (await import("./sleep/sleep.js")).sleepCommand,
+  },
+  {
+    name: "timeout",
+    load: async () => (await import("./timeout/timeout.js")).timeoutCommand,
+  },
+  {
+    name: "seq",
+    load: async () => (await import("./seq/seq.js")).seqCommand,
+  },
+  {
+    name: "expr",
+    load: async () => (await import("./expr/expr.js")).exprCommand,
   },
 
   // HTML processing

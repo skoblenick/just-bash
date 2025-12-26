@@ -16,6 +16,7 @@ import {
 } from "./commands/registry.js";
 import { type IFileSystem, VirtualFs } from "./fs.js";
 import type { InitialFiles } from "./fs-interface.js";
+import { ArithmeticError, ExitError } from "./interpreter/errors.js";
 import {
   Interpreter,
   type InterpreterOptions,
@@ -72,6 +73,12 @@ export interface ExecOptions {
    * Restored to original after execution.
    */
   cwd?: string;
+  /**
+   * If true, skip normalizing the script (trimming leading whitespace from lines).
+   * Useful when running scripts where leading whitespace is significant (e.g., here-docs).
+   * Default: false
+   */
+  rawScript?: boolean;
 }
 
 export class BashEnv {
@@ -97,6 +104,11 @@ export class BashEnv {
       HOME: this.useDefaultLayout ? "/home/user" : "/",
       PATH: "/bin:/usr/bin",
       IFS: " \t\n",
+      OSTYPE: "linux-gnu",
+      MACHTYPE: "x86_64-pc-linux-gnu",
+      HOSTTYPE: "x86_64",
+      PWD: cwd,
+      OLDPWD: cwd,
       ...options.env,
     };
 
@@ -121,11 +133,16 @@ export class BashEnv {
       functions: new Map<string, FunctionDefNode>(),
       localScopes: [],
       callDepth: 0,
+      sourceDepth: 0,
       commandCount: 0,
       lastExitCode: 0,
+      lastArg: "", // $_ is initially empty (or could be shell name)
       options: {
         errexit: false,
         pipefail: false,
+        nounset: false,
+        xtrace: false,
+        verbose: false,
       },
       inCondition: false,
       loopDepth: 0,
@@ -206,21 +223,30 @@ export class BashEnv {
 
     // Each exec call gets an isolated state copy - like starting a new shell
     // This ensures exec calls never interfere with each other
+    const effectiveCwd = options?.cwd ?? this.state.cwd;
     const execState: InterpreterState = {
       ...this.state,
-      env: { ...this.state.env, ...options?.env },
-      cwd: options?.cwd ?? this.state.cwd,
+      env: {
+        ...this.state.env,
+        ...options?.env,
+        // Update PWD when cwd option is provided
+        ...(options?.cwd ? { PWD: options.cwd } : {}),
+      },
+      cwd: effectiveCwd,
       // Deep copy mutable objects to prevent interference
       functions: new Map(this.state.functions),
       localScopes: [...this.state.localScopes],
       options: { ...this.state.options },
     };
 
-    // Normalize indented multi-line scripts
-    const normalizedLines = commandLine
-      .split("\n")
-      .map((line) => line.trimStart());
-    const normalized = normalizedLines.join("\n");
+    // Normalize indented multi-line scripts (unless rawScript is true)
+    let normalized = commandLine;
+    if (!options?.rawScript) {
+      const normalizedLines = commandLine
+        .split("\n")
+        .map((line) => line.trimStart());
+      normalized = normalizedLines.join("\n");
+    }
 
     try {
       const ast = parse(normalized);
@@ -242,6 +268,23 @@ export class BashEnv {
       // Interpreter always sets env, assert it for type safety
       return result as BashExecResult;
     } catch (error) {
+      // ExitError propagates from 'exit' builtin (including via eval/source)
+      if (error instanceof ExitError) {
+        return {
+          stdout: error.stdout,
+          stderr: error.stderr,
+          exitCode: error.exitCode,
+          env: { ...this.state.env, ...options?.env },
+        };
+      }
+      if (error instanceof ArithmeticError) {
+        return {
+          stdout: error.stdout,
+          stderr: error.stderr,
+          exitCode: 1,
+          env: { ...this.state.env, ...options?.env },
+        };
+      }
       if ((error as ParseException).name === "ParseException") {
         return {
           stdout: "",

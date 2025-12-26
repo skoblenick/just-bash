@@ -11,8 +11,22 @@
  */
 
 import type { ConditionalExpressionNode } from "../ast/types.js";
+import { parseArithmeticExpression } from "../parser/arithmetic-parser.js";
+import { Parser } from "../parser/parser.js";
 import type { ExecResult } from "../types.js";
+import { evaluateArithmeticSync } from "./arithmetic.js";
 import { expandWord } from "./expansion.js";
+import {
+  evaluateBinaryFileTest,
+  evaluateFileTest,
+  isBinaryFileTestOperator,
+  isFileTestOperator,
+} from "./helpers/file-tests.js";
+import { compareNumeric, isNumericOp } from "./helpers/numeric-compare.js";
+import { result as execResult, failure, testResult } from "./helpers/result.js";
+import { compareStrings, isStringCompareOp } from "./helpers/string-compare.js";
+import { evaluateStringTest, isStringTestOp } from "./helpers/string-tests.js";
+import { evaluateVariableTest } from "./helpers/variable-tests.js";
 import type { InterpreterContext } from "./types.js";
 
 export async function evaluateConditional(
@@ -24,12 +38,36 @@ export async function evaluateConditional(
       const left = await expandWord(ctx, expr.left);
       const right = await expandWord(ctx, expr.right);
 
+      // Check if RHS is fully quoted (should be treated literally, not as pattern)
+      const isRhsQuoted =
+        expr.right.parts.length > 0 &&
+        expr.right.parts.every(
+          (p) =>
+            p.type === "SingleQuoted" ||
+            p.type === "DoubleQuoted" ||
+            p.type === "Escaped",
+        );
+
+      // String comparisons (with pattern matching support in [[ ]])
+      if (isStringCompareOp(expr.operator)) {
+        return compareStrings(expr.operator, left, right, !isRhsQuoted);
+      }
+
+      // Numeric comparisons
+      if (isNumericOp(expr.operator)) {
+        return compareNumeric(
+          expr.operator,
+          evalArithExpr(ctx, left),
+          evalArithExpr(ctx, right),
+        );
+      }
+
+      // Binary file tests
+      if (isBinaryFileTestOperator(expr.operator)) {
+        return evaluateBinaryFileTest(ctx, expr.operator, left, right);
+      }
+
       switch (expr.operator) {
-        case "==":
-        case "=":
-          return matchPattern(left, right);
-        case "!=":
-          return !matchPattern(left, right);
         case "=~": {
           try {
             const regex = new RegExp(right);
@@ -42,29 +80,14 @@ export async function evaluateConditional(
             }
             return match !== null;
           } catch {
-            return false;
+            // Invalid regex pattern is a syntax error (exit code 2)
+            throw new Error("syntax error in regular expression");
           }
         }
         case "<":
           return left < right;
         case ">":
           return left > right;
-        case "-eq":
-          return Number.parseInt(left, 10) === Number.parseInt(right, 10);
-        case "-ne":
-          return Number.parseInt(left, 10) !== Number.parseInt(right, 10);
-        case "-lt":
-          return Number.parseInt(left, 10) < Number.parseInt(right, 10);
-        case "-le":
-          return Number.parseInt(left, 10) <= Number.parseInt(right, 10);
-        case "-gt":
-          return Number.parseInt(left, 10) > Number.parseInt(right, 10);
-        case "-ge":
-          return Number.parseInt(left, 10) >= Number.parseInt(right, 10);
-        case "-nt":
-        case "-ot":
-        case "-ef":
-          return false;
         default:
           return false;
       }
@@ -73,56 +96,21 @@ export async function evaluateConditional(
     case "CondUnary": {
       const operand = await expandWord(ctx, expr.operand);
 
-      switch (expr.operator) {
-        case "-z":
-          return operand === "";
-        case "-n":
-          return operand !== "";
-        case "-e":
-        case "-a":
-          return await ctx.fs.exists(resolvePath(ctx, operand));
-        case "-f": {
-          const path = resolvePath(ctx, operand);
-          if (await ctx.fs.exists(path)) {
-            const stat = await ctx.fs.stat(path);
-            return stat.isFile;
-          }
-          return false;
-        }
-        case "-d": {
-          const path = resolvePath(ctx, operand);
-          if (await ctx.fs.exists(path)) {
-            const stat = await ctx.fs.stat(path);
-            return stat.isDirectory;
-          }
-          return false;
-        }
-        case "-r":
-        case "-w":
-        case "-x":
-          return await ctx.fs.exists(resolvePath(ctx, operand));
-        case "-s": {
-          const path = resolvePath(ctx, operand);
-          if (await ctx.fs.exists(path)) {
-            const content = await ctx.fs.readFile(path);
-            return content.length > 0;
-          }
-          return false;
-        }
-        case "-L":
-        case "-h": {
-          const path = resolvePath(ctx, operand);
-          if (await ctx.fs.exists(path)) {
-            const stat = await ctx.fs.lstat(path);
-            return stat.isSymbolicLink;
-          }
-          return false;
-        }
-        case "-v":
-          return operand in ctx.state.env;
-        default:
-          return false;
+      // Handle file test operators using shared helper
+      if (isFileTestOperator(expr.operator)) {
+        return evaluateFileTest(ctx, expr.operator, operand);
       }
+
+      if (isStringTestOp(expr.operator)) {
+        return evaluateStringTest(expr.operator, operand);
+      }
+      if (expr.operator === "-v") {
+        return evaluateVariableTest(ctx, operand);
+      }
+      if (expr.operator === "-o") {
+        return evaluateShellOption(ctx, operand);
+      }
+      return false;
     }
 
     case "CondNot":
@@ -158,70 +146,59 @@ export async function evaluateTestArgs(
   args: string[],
 ): Promise<ExecResult> {
   if (args.length === 0) {
-    return { stdout: "", stderr: "", exitCode: 1 };
+    return execResult("", "", 1);
   }
 
   if (args.length === 1) {
-    return { stdout: "", stderr: "", exitCode: args[0] ? 0 : 1 };
+    return testResult(Boolean(args[0]));
   }
 
   if (args.length === 2) {
     const op = args[0];
     const operand = args[1];
 
-    switch (op) {
-      case "-z":
-        return { stdout: "", stderr: "", exitCode: operand === "" ? 0 : 1 };
-      case "-n":
-        return { stdout: "", stderr: "", exitCode: operand !== "" ? 0 : 1 };
-      case "-e":
-      case "-a": {
-        const exists = await ctx.fs.exists(resolvePath(ctx, operand));
-        return { stdout: "", stderr: "", exitCode: exists ? 0 : 1 };
-      }
-      case "-f": {
-        const path = resolvePath(ctx, operand);
-        if (await ctx.fs.exists(path)) {
-          const stat = await ctx.fs.stat(path);
-          return { stdout: "", stderr: "", exitCode: stat.isFile ? 0 : 1 };
-        }
-        return { stdout: "", stderr: "", exitCode: 1 };
-      }
-      case "-d": {
-        const path = resolvePath(ctx, operand);
-        if (await ctx.fs.exists(path)) {
-          const stat = await ctx.fs.stat(path);
-          return {
-            stdout: "",
-            stderr: "",
-            exitCode: stat.isDirectory ? 0 : 1,
-          };
-        }
-        return { stdout: "", stderr: "", exitCode: 1 };
-      }
-      case "-r":
-      case "-w":
-      case "-x": {
-        const exists = await ctx.fs.exists(resolvePath(ctx, operand));
-        return { stdout: "", stderr: "", exitCode: exists ? 0 : 1 };
-      }
-      case "-s": {
-        const path = resolvePath(ctx, operand);
-        if (await ctx.fs.exists(path)) {
-          const content = await ctx.fs.readFile(path);
-          return {
-            stdout: "",
-            stderr: "",
-            exitCode: content.length > 0 ? 0 : 1,
-          };
-        }
-        return { stdout: "", stderr: "", exitCode: 1 };
-      }
-      case "!":
-        return { stdout: "", stderr: "", exitCode: operand ? 1 : 0 };
-      default:
-        return { stdout: "", stderr: "", exitCode: 1 };
+    // "(" without matching ")" is a syntax error
+    if (op === "(") {
+      return failure("test: '(' without matching ')'\n", 2);
     }
+
+    // Handle file test operators using shared helper
+    if (isFileTestOperator(op)) {
+      return testResult(await evaluateFileTest(ctx, op, operand));
+    }
+
+    if (isStringTestOp(op)) {
+      return testResult(evaluateStringTest(op, operand));
+    }
+    if (op === "!") {
+      return testResult(!operand);
+    }
+    if (op === "-v") {
+      return testResult(evaluateVariableTest(ctx, operand));
+    }
+    if (op === "-o") {
+      return testResult(evaluateShellOption(ctx, operand));
+    }
+    // If the first arg is a known binary operator but used in 2-arg context, it's an error
+    if (
+      op === "=" ||
+      op === "==" ||
+      op === "!=" ||
+      op === "<" ||
+      op === ">" ||
+      op === "-eq" ||
+      op === "-ne" ||
+      op === "-lt" ||
+      op === "-le" ||
+      op === "-gt" ||
+      op === "-ge" ||
+      op === "-nt" ||
+      op === "-ot" ||
+      op === "-ef"
+    ) {
+      return failure(`test: ${op}: unary operator expected\n`, 2);
+    }
+    return execResult("", "", 1);
   }
 
   if (args.length === 3) {
@@ -229,70 +206,97 @@ export async function evaluateTestArgs(
     const op = args[1];
     const right = args[2];
 
+    // POSIX 3-argument rules:
+    // If $2 is a binary primary, evaluate as: $1 op $3
+    // Binary primaries include: =, !=, -eq, -ne, -lt, -le, -gt, -ge, -a, -o, -nt, -ot, -ef
+    // Note: -a and -o as binary primaries test if both/either operand is non-empty
+
+    // String comparisons (no pattern matching in test/[)
+    if (isStringCompareOp(op)) {
+      return testResult(compareStrings(op, left, right));
+    }
+
+    if (isNumericOp(op)) {
+      const leftNum = parseNumericDecimal(left);
+      const rightNum = parseNumericDecimal(right);
+      // Invalid operand returns exit code 2
+      if (!leftNum.valid || !rightNum.valid) {
+        return execResult("", "", 2);
+      }
+      return testResult(compareNumeric(op, leftNum.value, rightNum.value));
+    }
+
+    // Binary file tests
+    if (isBinaryFileTestOperator(op)) {
+      return testResult(await evaluateBinaryFileTest(ctx, op, left, right));
+    }
+
     switch (op) {
-      case "=":
-      case "==":
-        return {
-          stdout: "",
-          stderr: "",
-          exitCode: matchPattern(left, right) ? 0 : 1,
-        };
-      case "!=":
-        return {
-          stdout: "",
-          stderr: "",
-          exitCode: !matchPattern(left, right) ? 0 : 1,
-        };
-      case "-eq":
-        return {
-          stdout: "",
-          stderr: "",
-          exitCode:
-            Number.parseInt(left, 10) === Number.parseInt(right, 10) ? 0 : 1,
-        };
-      case "-ne":
-        return {
-          stdout: "",
-          stderr: "",
-          exitCode:
-            Number.parseInt(left, 10) !== Number.parseInt(right, 10) ? 0 : 1,
-        };
-      case "-lt":
-        return {
-          stdout: "",
-          stderr: "",
-          exitCode:
-            Number.parseInt(left, 10) < Number.parseInt(right, 10) ? 0 : 1,
-        };
-      case "-le":
-        return {
-          stdout: "",
-          stderr: "",
-          exitCode:
-            Number.parseInt(left, 10) <= Number.parseInt(right, 10) ? 0 : 1,
-        };
-      case "-gt":
-        return {
-          stdout: "",
-          stderr: "",
-          exitCode:
-            Number.parseInt(left, 10) > Number.parseInt(right, 10) ? 0 : 1,
-        };
-      case "-ge":
-        return {
-          stdout: "",
-          stderr: "",
-          exitCode:
-            Number.parseInt(left, 10) >= Number.parseInt(right, 10) ? 0 : 1,
-        };
-      default:
-        return { stdout: "", stderr: "", exitCode: 1 };
+      case "-a":
+        // In 3-arg context, -a is binary AND: both operands must be non-empty
+        return testResult(left !== "" && right !== "");
+      case "-o":
+        // In 3-arg context, -o is binary OR: at least one operand must be non-empty
+        return testResult(left !== "" || right !== "");
+      case ">":
+        // String comparison: left > right (lexicographically)
+        return testResult(left > right);
+      case "<":
+        // String comparison: left < right (lexicographically)
+        return testResult(left < right);
+    }
+
+    // If $1 is '!', negate the 2-argument test
+    if (left === "!") {
+      const negResult = await evaluateTestArgs(ctx, [op, right]);
+      return execResult(
+        "",
+        negResult.stderr,
+        negResult.exitCode === 0
+          ? 1
+          : negResult.exitCode === 1
+            ? 0
+            : negResult.exitCode,
+      );
+    }
+
+    // If $1 is '(' and $3 is ')', evaluate $2 as single-arg test
+    if (left === "(" && right === ")") {
+      return testResult(op !== "");
+    }
+  }
+
+  // POSIX 4-argument rules
+  if (args.length === 4) {
+    // If $1 is '!', negate the 3-argument expression
+    if (args[0] === "!") {
+      const negResult = await evaluateTestArgs(ctx, args.slice(1));
+      return execResult(
+        "",
+        negResult.stderr,
+        negResult.exitCode === 0
+          ? 1
+          : negResult.exitCode === 1
+            ? 0
+            : negResult.exitCode,
+      );
+    }
+
+    // If $1 is '(' and $4 is ')', evaluate $2 and $3 as 2-arg expression
+    if (args[0] === "(" && args[3] === ")") {
+      return evaluateTestArgs(ctx, [args[1], args[2]]);
     }
   }
 
   // Handle compound expressions with -a (AND) and -o (OR)
-  const result = await evaluateTestExpr(ctx, args, 0);
-  return { stdout: "", stderr: "", exitCode: result.value ? 0 : 1 };
+  const exprResult = await evaluateTestExpr(ctx, args, 0);
+
+  // Check for unconsumed tokens (extra arguments = syntax error)
+  if (exprResult.pos < args.length) {
+    return failure("test: too many arguments\n", 2);
+  }
+
+  return testResult(exprResult.value);
 }
 
 // Recursive expression evaluator for test command
@@ -358,96 +362,59 @@ async function evaluateTestPrimary(
     return { value, pos: args[newPos] === ")" ? newPos + 1 : newPos };
   }
 
-  // Unary file tests
-  const fileOps = ["-e", "-a", "-f", "-d", "-r", "-w", "-x", "-s", "-L", "-h"];
-  if (fileOps.includes(token)) {
+  // Unary file tests - use shared helper
+  if (isFileTestOperator(token)) {
     const operand = args[pos + 1] ?? "";
-    const path = resolvePath(ctx, operand);
-
-    let value = false;
-    switch (token) {
-      case "-e":
-      case "-a":
-        value = await ctx.fs.exists(path);
-        break;
-      case "-f":
-        if (await ctx.fs.exists(path)) {
-          const stat = await ctx.fs.stat(path);
-          value = stat.isFile;
-        }
-        break;
-      case "-d":
-        if (await ctx.fs.exists(path)) {
-          const stat = await ctx.fs.stat(path);
-          value = stat.isDirectory;
-        }
-        break;
-      case "-r":
-      case "-w":
-      case "-x":
-        value = await ctx.fs.exists(path);
-        break;
-      case "-s":
-        if (await ctx.fs.exists(path)) {
-          const content = await ctx.fs.readFile(path);
-          value = content.length > 0;
-        }
-        break;
-      case "-L":
-      case "-h":
-        if (await ctx.fs.exists(path)) {
-          const stat = await ctx.fs.lstat(path);
-          value = stat.isSymbolicLink;
-        }
-        break;
-    }
+    const value = await evaluateFileTest(ctx, token, operand);
     return { value, pos: pos + 2 };
   }
 
-  // Unary string tests
-  if (token === "-z") {
+  // Unary string tests - use shared helper
+  if (isStringTestOp(token)) {
     const operand = args[pos + 1] ?? "";
-    return { value: operand === "", pos: pos + 2 };
+    return { value: evaluateStringTest(token, operand), pos: pos + 2 };
   }
-  if (token === "-n") {
-    const operand = args[pos + 1] ?? "";
-    return { value: operand !== "", pos: pos + 2 };
+
+  // Variable tests
+  if (token === "-v") {
+    const varName = args[pos + 1] ?? "";
+    const value = evaluateVariableTest(ctx, varName);
+    return { value, pos: pos + 2 };
+  }
+
+  // Shell option tests
+  if (token === "-o") {
+    const optName = args[pos + 1] ?? "";
+    const value = evaluateShellOption(ctx, optName);
+    return { value, pos: pos + 2 };
   }
 
   // Check for binary operators
+  // Note: [ / test uses literal string comparison, NOT pattern matching
   const next = args[pos + 1];
-  if (next === "=" || next === "==" || next === "!=") {
+  if (isStringCompareOp(next)) {
     const left = token;
     const right = args[pos + 2] ?? "";
-    const isEqual = matchPattern(left, right);
-    return { value: next === "!=" ? !isEqual : isEqual, pos: pos + 3 };
+    return { value: compareStrings(next, left, right), pos: pos + 3 };
   }
 
-  const numericOps = ["-eq", "-ne", "-lt", "-le", "-gt", "-ge"];
-  if (numericOps.includes(next)) {
-    const left = Number.parseInt(token, 10);
-    const right = Number.parseInt(args[pos + 2] ?? "0", 10);
-    let value = false;
-    switch (next) {
-      case "-eq":
-        value = left === right;
-        break;
-      case "-ne":
-        value = left !== right;
-        break;
-      case "-lt":
-        value = left < right;
-        break;
-      case "-le":
-        value = left <= right;
-        break;
-      case "-gt":
-        value = left > right;
-        break;
-      case "-ge":
-        value = left >= right;
-        break;
+  if (isNumericOp(next)) {
+    const leftParsed = parseNumericDecimal(token);
+    const rightParsed = parseNumericDecimal(args[pos + 2] ?? "0");
+    // Invalid operands - return false (will cause exit code 2 at higher level)
+    if (!leftParsed.valid || !rightParsed.valid) {
+      // For now, return false which is at least consistent with "comparison failed"
+      return { value: false, pos: pos + 3 };
     }
+    const value = compareNumeric(next, leftParsed.value, rightParsed.value);
+    return { value, pos: pos + 3 };
+  }
+
+  // Binary file tests
+  if (isBinaryFileTestOperator(next)) {
+    const left = token;
+    const right = args[pos + 2] ?? "";
+    const value = await evaluateBinaryFileTest(ctx, next, left, right);
     return { value, pos: pos + 3 };
   }
 
@@ -459,7 +426,21 @@ export function matchPattern(value: string, pattern: string): boolean {
   let regex = "^";
   for (let i = 0; i < pattern.length; i++) {
     const char = pattern[i];
-    if (char === "*") {
+    // Handle backslash escapes - next char is literal
+    if (char === "\\") {
+      if (i + 1 < pattern.length) {
+        const next = pattern[i + 1];
+        // Escape regex special chars
+        if (/[\\^$.|+(){}[\]*?]/.test(next)) {
+          regex += `\\${next}`;
+        } else {
+          regex += next;
+        }
+        i++; // Skip the escaped character
+      } else {
+        regex += "\\\\"; // Trailing backslash
+      }
+    } else if (char === "*") {
       regex += ".*";
     } else if (char === "?") {
       regex += ".";
@@ -482,6 +463,173 @@ export function matchPattern(value: string, pattern: string): boolean {
   return new RegExp(regex).test(value);
 }
 
-function resolvePath(ctx: InterpreterContext, path: string): string {
-  return ctx.fs.resolvePath(ctx.state.cwd, path);
+/**
+ * Evaluate -o option test (check if shell option is enabled).
+ * Maps option names to interpreter state flags.
+ */
+function evaluateShellOption(ctx: InterpreterContext, option: string): boolean {
+  // Map of option names to their state in ctx.state.options
+  // Only includes options that are actually implemented
+  const optionMap: Record<string, () => boolean> = {
+    // Implemented options (set -o)
+    errexit: () => ctx.state.options.errexit === true,
+    nounset: () => ctx.state.options.nounset === true,
+    pipefail: () => ctx.state.options.pipefail === true,
+    xtrace: () => ctx.state.options.xtrace === true,
+    // Single-letter aliases for implemented options
+    e: () => ctx.state.options.errexit === true,
+    u: () => ctx.state.options.nounset === true,
+    x: () => ctx.state.options.xtrace === true,
+  };
+
+  const getter = optionMap[option];
+  if (getter) {
+    return getter();
+  }
+  // Unknown or unimplemented option - return false
+  return false;
+}
+
+/**
+ * Evaluate an arithmetic expression string for [[ ]] comparisons.
+ * In bash, [[ -eq ]] etc. evaluate operands as arithmetic expressions.
+ */
+function evalArithExpr(ctx: InterpreterContext, expr: string): number {
+  expr = expr.trim();
+  if (expr === "") return 0;
+
+  // First try simple numeric parsing (handles octal, hex, base-N)
+  // If the expression is just a number, parseNumeric handles it correctly
+  if (/^[+-]?(\d+#[a-zA-Z0-9@_]+|0[xX][0-9a-fA-F]+|0[0-7]+|\d+)$/.test(expr)) {
+    return parseNumeric(expr);
+  }
+
+  // Otherwise, parse and evaluate as arithmetic expression
+  try {
+    const parser = new Parser();
+    const arithAst = parseArithmeticExpression(parser, expr);
+    return evaluateArithmeticSync(ctx, arithAst.expression);
+  } catch {
+    // If parsing fails, try simple numeric
+    return parseNumeric(expr);
+  }
+}
+
+/**
+ * Parse a number in base N (2-64).
+ * Digit values: 0-9=0-9, a-z=10-35, A-Z=36-61, @=62, _=63
+ */
+function parseBaseN(digits: string, base: number): number {
+  let result = 0;
+  for (const char of digits) {
+    let digitValue: number;
+    if (char >= "0" && char <= "9") {
+      digitValue = char.charCodeAt(0) - 48; // '0' = 48
+    } else if (char >= "a" && char <= "z") {
+      digitValue = char.charCodeAt(0) - 97 + 10; // 'a' = 97
+    } else if (char >= "A" && char <= "Z") {
+      digitValue = char.charCodeAt(0) - 65 + 36; // 'A' = 65
+    } else if (char === "@") {
+      digitValue = 62;
+    } else if (char === "_") {
+      digitValue = 63;
+    } else {
+      return Number.NaN;
+    }
+    if (digitValue >= base) {
+      return Number.NaN;
+    }
+    result = result * base + digitValue;
+  }
+  return result;
+}
+
+/**
+ * Parse a bash numeric value, supporting:
+ * - Decimal: 42, -42
+ * - Octal: 0777, -0123
+ * - Hex: 0xff, 0xFF, -0xff
+ * - Base-N: 64#a, 2#1010
+ * - Strings are coerced to 0
+ */
+function parseNumeric(value: string): number {
+  value = value.trim();
+  if (value === "") return 0;
+
+  // Handle negative numbers
+  let negative = false;
+  if (value.startsWith("-")) {
+    negative = true;
+    value = value.slice(1);
+  } else if (value.startsWith("+")) {
+    value = value.slice(1);
+  }
+
+  let result: number;
+
+  // Base-N syntax: base#value
+  const baseMatch = value.match(/^(\d+)#([a-zA-Z0-9@_]+)$/);
+  if (baseMatch) {
+    const base = Number.parseInt(baseMatch[1], 10);
+    if (base >= 2 && base <= 64) {
+      result = parseBaseN(baseMatch[2], base);
+    } else {
+      result = 0;
+    }
+  }
+  // Hex: 0x or 0X
+  else if (/^0[xX][0-9a-fA-F]+$/.test(value)) {
+    result = Number.parseInt(value, 16);
+  }
+  // Octal: starts with 0 followed by digits (0-7)
+  else if (/^0[0-7]+$/.test(value)) {
+    result = Number.parseInt(value, 8);
+  }
+  // Decimal
+  else {
+    result = Number.parseInt(value, 10);
+  }
+
+  // NaN becomes 0 (bash coerces invalid strings to 0)
+  if (Number.isNaN(result)) {
+    result = 0;
+  }
+
+  return negative ? -result : result;
+}
+
+/**
+ * Parse a number as plain decimal (for test/[ command).
+ * Unlike parseNumeric, this does NOT interpret octal/hex/base-N.
+ * Leading zeros are treated as decimal.
+ * Returns { value, valid } - valid is false if input is invalid.
+ */
+function parseNumericDecimal(value: string): { value: number; valid: boolean } {
+  value = value.trim();
+  if (value === "") return { value: 0, valid: true };
+
+  // Handle negative numbers
+  let negative = false;
+  if (value.startsWith("-")) {
+    negative = true;
+    value = value.slice(1);
+  } else if (value.startsWith("+")) {
+    value = value.slice(1);
+  }
+
+  // Check if it's a valid decimal number (only digits)
+  if (!/^\d+$/.test(value)) {
+    // Invalid format (hex, base-N, letters, etc.)
+    return { value: 0, valid: false };
+  }
+
+  // Always parse as decimal (base 10)
+  const result = Number.parseInt(value, 10);
+
+  // NaN is invalid
+  if (Number.isNaN(result)) {
+    return { value: 0, valid: false };
+  }
+
+  return { value: negative ? -result : result, valid: true };
 }

@@ -328,11 +328,20 @@ export type ParameterOperation =
   | ErrorIfUnsetOp
   | UseAlternativeOp
   | LengthOp
+  | LengthSliceErrorOp
   | SubstringOp
   | PatternRemovalOp
   | PatternReplacementOp
   | CaseModificationOp
-  | IndirectionOp;
+  | TransformOp
+  | IndirectionOp
+  | ArrayKeysOp
+  | VarNamePrefixOp;
+
+/** ${#VAR:...} - invalid syntax, length cannot have substring */
+export interface LengthSliceErrorOp {
+  type: "LengthSliceError";
+}
 
 /** ${VAR:-default} or ${VAR-default} */
 export interface DefaultValueOp {
@@ -405,9 +414,34 @@ export interface CaseModificationOp {
   pattern: WordNode | null;
 }
 
+/** ${var@Q}, ${var@P}, etc. - parameter transformation */
+export interface TransformOp {
+  type: "Transform";
+  /** Q=quote, P=prompt, a=attributes, A=assignment, E=escape, K=keys */
+  operator: "Q" | "P" | "a" | "A" | "E" | "K";
+}
+
 /** ${!VAR} - indirect expansion */
 export interface IndirectionOp {
   type: "Indirection";
+}
+
+/** ${!arr[@]} or ${!arr[*]} - array keys/indices */
+export interface ArrayKeysOp {
+  type: "ArrayKeys";
+  /** The array name (without subscript) */
+  array: string;
+  /** true if [*] was used instead of [@] */
+  star: boolean;
+}
+
+/** ${!prefix*} or ${!prefix@} - list variable names with prefix */
+export interface VarNamePrefixOp {
+  type: "VarNamePrefix";
+  /** The prefix to match */
+  prefix: string;
+  /** true if * was used instead of @ */
+  star: boolean;
 }
 
 // =============================================================================
@@ -445,7 +479,64 @@ export type ArithExpr =
   | ArithUnaryNode
   | ArithTernaryNode
   | ArithAssignmentNode
-  | ArithGroupNode;
+  | ArithGroupNode
+  | ArithNestedNode
+  | ArithCommandSubstNode
+  | ArithBracedExpansionNode
+  | ArithArrayElementNode
+  | ArithDynamicBaseNode
+  | ArithDynamicNumberNode
+  | ArithConcatNode
+  | ArithDoubleSubscriptNode
+  | ArithNumberSubscriptNode;
+
+export interface ArithBracedExpansionNode extends ASTNode {
+  type: "ArithBracedExpansion";
+  content: string; // The content inside ${...}, e.g., "j:-5"
+}
+
+/** Dynamic base constant: ${base}#value where base is expanded at runtime */
+export interface ArithDynamicBaseNode extends ASTNode {
+  type: "ArithDynamicBase";
+  baseExpr: string; // The variable content (e.g., "base" from ${base})
+  value: string; // The value after # (e.g., "a" from ${base}#a)
+}
+
+/** Dynamic number prefix: ${zero}11 or ${zero}xAB for dynamic octal/hex */
+export interface ArithDynamicNumberNode extends ASTNode {
+  type: "ArithDynamicNumber";
+  prefix: string; // The variable content (e.g., "zero" from ${zero})
+  suffix: string; // The suffix (e.g., "11" or "xAB")
+}
+
+/** Concatenation of multiple parts forming a single numeric value */
+export interface ArithConcatNode extends ASTNode {
+  type: "ArithConcat";
+  parts: ArithExpr[]; // Parts to concatenate (e.g., [$(echo 1), ${x:-3}] → "13")
+}
+
+export interface ArithArrayElementNode extends ASTNode {
+  type: "ArithArrayElement";
+  array: string; // The array name
+  /** The index expression (for numeric indices) */
+  index?: ArithExpr;
+  /** For associative arrays: literal string key (e.g., 'key' or "key") */
+  stringKey?: string;
+}
+
+/** Invalid double subscript node (e.g., a[1][1]) - evaluated to error at runtime */
+export interface ArithDoubleSubscriptNode extends ASTNode {
+  type: "ArithDoubleSubscript";
+  array: string; // The array name
+  index: ArithExpr; // The first index expression
+}
+
+/** Invalid number subscript node (e.g., 1[2]) - evaluated to error at runtime */
+export interface ArithNumberSubscriptNode extends ASTNode {
+  type: "ArithNumberSubscript";
+  number: string; // The number that was attempted to be subscripted
+  errorToken: string; // The error token for the error message
+}
 
 export interface ArithNumberNode extends ASTNode {
   type: "ArithNumber";
@@ -516,12 +607,28 @@ export interface ArithAssignmentNode extends ASTNode {
   type: "ArithAssignment";
   operator: ArithAssignmentOperator;
   variable: string;
+  /** For array element assignment: the subscript expression */
+  subscript?: ArithExpr;
+  /** For associative arrays: literal string key (e.g., 'key' or "key") */
+  stringKey?: string;
   value: ArithExpr;
 }
 
 export interface ArithGroupNode extends ASTNode {
   type: "ArithGroup";
   expression: ArithExpr;
+}
+
+/** Nested arithmetic expansion within arithmetic context: $((expr)) */
+export interface ArithNestedNode extends ASTNode {
+  type: "ArithNested";
+  expression: ArithExpr;
+}
+
+/** Command substitution within arithmetic context: $(cmd) or `cmd` */
+export interface ArithCommandSubstNode extends ASTNode {
+  type: "ArithCommandSubst";
+  command: string;
 }
 
 // =============================================================================
@@ -552,6 +659,9 @@ export type BraceItem =
       start: string | number;
       end: string | number;
       step?: number;
+      // Original string form for zero-padding support
+      startStr?: string;
+      endStr?: string;
     };
 
 /** Tilde expansion: ~ or ~user */

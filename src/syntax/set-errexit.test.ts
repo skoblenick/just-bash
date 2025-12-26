@@ -281,21 +281,21 @@ describe("Bash Syntax - set -e (errexit)", () => {
 
     it("should error on unknown combined flag", async () => {
       const env = new BashEnv();
-      // Use -xe (not -ex) so the error happens before errexit is enabled
-      const result = await env.exec("set -xe");
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("-x");
+      // Use -ze (z is invalid) so the error happens before errexit is enabled
+      const result = await env.exec("set -ze");
+      expect(result.exitCode).toBe(1); // implementation returns 1 for invalid options
+      expect(result.stderr).toContain("-z");
       expect(result.stderr).toContain("invalid option");
     });
 
-    it("should trigger errexit when set -ex fails on x", async () => {
+    it("should trigger errexit when set -ez fails on z", async () => {
       const env = new BashEnv();
-      // With -ex, errexit is enabled first, then x fails - errexit kicks in
+      // With -ez, errexit is enabled first, then z fails - errexit kicks in
       const result = await env.exec(`
-        set -ex
+        set -ez
         echo "should not reach"
       `);
-      // Command fails with exit code 1, errexit is active so it exits
+      // Command fails with exit code 1 for invalid option
       expect(result.exitCode).toBe(1);
       // No echo output because script exited on the set command failure
       expect(result.stdout).toBe("");
@@ -333,26 +333,28 @@ describe("Bash Syntax - set -e (errexit)", () => {
 
     it("should error on unknown long option", async () => {
       const env = new BashEnv();
-      const result = await env.exec("set -o nounset");
+      const result = await env.exec("set -o unknownoption");
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("nounset");
+      expect(result.stderr).toContain("unknownoption");
       expect(result.stderr).toContain("invalid option name");
     });
 
-    it("should error when -o is missing argument", async () => {
+    it("should list options when -o has no argument", async () => {
+      // In bash, `set -o` without argument lists all options
       const env = new BashEnv();
       const result = await env.exec("set -o");
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("-o");
-      expect(result.stderr).toContain("requires an argument");
+      expect(result.exitCode).toBe(0);
+      // Should output option status (e.g., "errexit off")
+      expect(result.stdout).toContain("errexit");
     });
 
-    it("should error when +o is missing argument", async () => {
+    it("should list options when +o has no argument", async () => {
+      // In bash, `set +o` without argument outputs commands to recreate settings
       const env = new BashEnv();
       const result = await env.exec("set +o");
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("+o");
-      expect(result.stderr).toContain("requires an argument");
+      expect(result.exitCode).toBe(0);
+      // Should output set commands (e.g., "set +o errexit")
+      expect(result.stdout).toContain("set");
     });
   });
 });

@@ -147,14 +147,18 @@ function formatStats(
   showChars: boolean,
   filename: string,
 ): string {
-  // Real wc uses 8-char fields for counts, no separator between them
-  // Then a single space before filename
-  let result = "";
+  const values: string[] = [];
+  if (showLines) {
+    values.push(String(stats.lines));
+  }
+  if (showWords) {
+    values.push(String(stats.words));
+  }
+  if (showChars) {
+    values.push(String(stats.chars));
+  }
 
-  if (showLines) result += String(stats.lines).padStart(8);
-  if (showWords) result += String(stats.words).padStart(8);
-  if (showChars) result += String(stats.chars).padStart(8);
-
+  let result = values.join(" ");
   if (filename) {
     result += ` ${filename}`;
   }

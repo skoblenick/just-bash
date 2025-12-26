@@ -25,24 +25,30 @@ import type {
 } from "../ast/types.js";
 import type { IFileSystem } from "../fs-interface.js";
 import type { SecureFetch } from "../network/index.js";
+import { parseArithmeticExpression } from "../parser/arithmetic-parser.js";
+import { Parser } from "../parser/parser.js";
 import type { CommandContext, CommandRegistry, ExecResult } from "../types.js";
-import { evaluateArithmetic } from "./arithmetic.js";
+import { evaluateArithmetic, evaluateArithmeticSync } from "./arithmetic.js";
 import {
   handleBreak,
   handleCd,
   handleContinue,
+  handleDeclare,
+  handleEval,
   handleExit,
   handleExport,
+  handleLet,
   handleLocal,
   handleRead,
+  handleReadonly,
+  handleReturn,
   handleSet,
+  handleShift,
   handleSource,
   handleUnset,
 } from "./builtins/index.js";
 import { evaluateConditional, evaluateTestArgs } from "./conditionals.js";
 import {
-  BreakError,
-  ContinueError,
   executeCase,
   executeCStyleFor,
   executeFor,
@@ -50,26 +56,32 @@ import {
   executeUntil,
   executeWhile,
 } from "./control-flow.js";
-import { expandWord, expandWordWithGlob } from "./expansion.js";
+import {
+  ArithmeticError,
+  BadSubstitutionError,
+  BreakError,
+  ContinueError,
+  ErrexitError,
+  ExitError,
+  isScopeExitError,
+  NounsetError,
+  ReturnError,
+} from "./errors.js";
+import {
+  expandWord,
+  expandWordWithGlob,
+  getArrayElements,
+} from "./expansion.js";
 import { callFunction, executeFunctionDef } from "./functions.js";
+import { getErrorMessage } from "./helpers/errors.js";
+import { checkReadonlyError } from "./helpers/readonly.js";
+import { failure, OK, result, testResult } from "./helpers/result.js";
 import { applyRedirections } from "./redirections.js";
 import type { InterpreterContext, InterpreterState } from "./types.js";
 
+// Re-export ErrexitError for backwards compatibility
+export { ErrexitError } from "./errors.js";
 export type { InterpreterContext, InterpreterState } from "./types.js";
-
-/**
- * Error thrown when set -e (errexit) is enabled and a command fails.
- */
-export class ErrexitError extends Error {
-  constructor(
-    public readonly exitCode: number,
-    public stdout: string = "",
-    public stderr: string = "",
-  ) {
-    super(`errexit: command exited with status ${exitCode}`);
-    this.name = "ErrexitError";
-  }
-}
 
 export interface InterpreterOptions {
   fs: IFileSystem;
@@ -116,25 +128,64 @@ export class Interpreter {
     let stderr = "";
     let exitCode = 0;
 
-    try {
-      for (const statement of node.statements) {
+    for (const statement of node.statements) {
+      try {
         const result = await this.executeStatement(statement);
         stdout += result.stdout;
         stderr += result.stderr;
         exitCode = result.exitCode;
         this.ctx.state.lastExitCode = exitCode;
         this.ctx.state.env["?"] = String(exitCode);
+      } catch (error) {
+        // ExitError always propagates up to terminate the script
+        // This allows 'eval exit 42' and 'source exit.sh' to exit properly
+        if (error instanceof ExitError) {
+          error.prependOutput(stdout, stderr);
+          throw error;
+        }
+        if (error instanceof ErrexitError) {
+          stdout += error.stdout;
+          stderr += error.stderr;
+          exitCode = error.exitCode;
+          this.ctx.state.lastExitCode = exitCode;
+          this.ctx.state.env["?"] = String(exitCode);
+          return { stdout, stderr, exitCode, env: { ...this.ctx.state.env } };
+        }
+        if (error instanceof NounsetError) {
+          stdout += error.stdout;
+          stderr += error.stderr;
+          exitCode = 1;
+          this.ctx.state.lastExitCode = exitCode;
+          this.ctx.state.env["?"] = String(exitCode);
+          return { stdout, stderr, exitCode, env: { ...this.ctx.state.env } };
+        }
+        if (error instanceof BadSubstitutionError) {
+          stdout += error.stdout;
+          stderr += error.stderr;
+          exitCode = 1;
+          this.ctx.state.lastExitCode = exitCode;
+          this.ctx.state.env["?"] = String(exitCode);
+          return { stdout, stderr, exitCode, env: { ...this.ctx.state.env } };
+        }
+        // Handle break/continue errors
+        if (error instanceof BreakError || error instanceof ContinueError) {
+          // If we're inside a loop, propagate the error up (for eval/source inside loops)
+          if (this.ctx.state.loopDepth > 0) {
+            error.prependOutput(stdout, stderr);
+            throw error;
+          }
+          // Outside loops (level exceeded loop depth), silently continue with next statement
+          stdout += error.stdout;
+          stderr += error.stderr;
+          continue;
+        }
+        // Handle return - prepend accumulated output before propagating
+        if (error instanceof ReturnError) {
+          error.prependOutput(stdout, stderr);
+          throw error;
+        }
+        throw error;
       }
-    } catch (error) {
-      if (error instanceof ErrexitError) {
-        stdout += error.stdout;
-        stderr += error.stderr;
-        exitCode = error.exitCode;
-        this.ctx.state.lastExitCode = exitCode;
-        this.ctx.state.env["?"] = String(exitCode);
-        return { stdout, stderr, exitCode, env: { ...this.ctx.state.env } };
-      }
-      throw error;
     }
 
     return { stdout, stderr, exitCode, env: { ...this.ctx.state.env } };
@@ -187,22 +238,50 @@ export class Interpreter {
       !lastPipelineNegated &&
       !this.ctx.state.inCondition
     ) {
-      throw new ErrexitError(exitCode);
+      throw new ErrexitError(exitCode, stdout, stderr);
     }
 
-    return { stdout, stderr, exitCode };
+    return result(stdout, stderr, exitCode);
   }
 
   private async executePipeline(node: PipelineNode): Promise<ExecResult> {
     let stdin = "";
-    let lastResult: ExecResult = { stdout: "", stderr: "", exitCode: 0 };
+    let lastResult: ExecResult = OK;
     let pipefailExitCode = 0; // Track rightmost failing command
+    const pipestatusExitCodes: number[] = []; // Track all exit codes for PIPESTATUS
 
     for (let i = 0; i < node.commands.length; i++) {
       const command = node.commands[i];
       const isLast = i === node.commands.length - 1;
 
-      const result = await this.executeCommand(command, stdin);
+      let result: ExecResult;
+      try {
+        result = await this.executeCommand(command, stdin);
+      } catch (error) {
+        // BadSubstitutionError should fail the command but not abort the script
+        if (error instanceof BadSubstitutionError) {
+          result = {
+            stdout: error.stdout,
+            stderr: error.stderr,
+            exitCode: 1,
+          };
+        }
+        // In a MULTI-command pipeline, each command runs in a subshell context
+        // So exit/return only affect that segment, not the whole script
+        // For single commands, let ExitError propagate to terminate the script
+        else if (error instanceof ExitError && node.commands.length > 1) {
+          result = {
+            stdout: error.stdout,
+            stderr: error.stderr,
+            exitCode: error.exitCode,
+          };
+        } else {
+          throw error;
+        }
+      }
+
+      // Track exit code for PIPESTATUS
+      pipestatusExitCodes.push(result.exitCode);
 
       // Track the exit code of failing commands for pipefail
       if (result.exitCode !== 0) {
@@ -220,6 +299,19 @@ export class Interpreter {
         lastResult = result;
       }
     }
+
+    // Set PIPESTATUS array with exit codes from all pipeline commands
+    // Clear any previous PIPESTATUS entries
+    for (const key of Object.keys(this.ctx.state.env)) {
+      if (key.startsWith("PIPESTATUS_")) {
+        delete this.ctx.state.env[key];
+      }
+    }
+    // Set new PIPESTATUS entries
+    for (let i = 0; i < pipestatusExitCodes.length; i++) {
+      this.ctx.state.env[`PIPESTATUS_${i}`] = String(pipestatusExitCodes[i]);
+    }
+    this.ctx.state.env.PIPESTATUS__length = String(pipestatusExitCodes.length);
 
     // If pipefail is enabled, use the rightmost failing exit code
     if (this.ctx.state.options.pipefail && pipefailExitCode !== 0) {
@@ -253,15 +345,15 @@ export class Interpreter {
       case "CStyleFor":
         return executeCStyleFor(this.ctx, node);
       case "While":
-        return executeWhile(this.ctx, node);
+        return executeWhile(this.ctx, node, stdin);
       case "Until":
         return executeUntil(this.ctx, node);
       case "Case":
         return executeCase(this.ctx, node);
       case "Subshell":
-        return this.executeSubshell(node);
+        return this.executeSubshell(node, stdin);
       case "Group":
-        return this.executeGroup(node);
+        return this.executeGroup(node, stdin);
       case "FunctionDef":
         return executeFunctionDef(this.ctx, node);
       case "ArithmeticCommand":
@@ -269,7 +361,7 @@ export class Interpreter {
       case "ConditionalCommand":
         return this.executeConditionalCommand(node);
       default:
-        return { stdout: "", stderr: "", exitCode: 0 };
+        return OK;
     }
   }
 
@@ -281,24 +373,219 @@ export class Interpreter {
     node: SimpleCommandNode,
     stdin: string,
   ): Promise<ExecResult> {
+    try {
+      return await this.executeSimpleCommandInner(node, stdin);
+    } catch (error) {
+      if (error instanceof ArithmeticError) {
+        // Arithmetic errors in expansion should not terminate the script
+        // Just return exit code 1 with the error message on stderr
+        return failure(error.stderr);
+      }
+      throw error;
+    }
+  }
+
+  private async executeSimpleCommandInner(
+    node: SimpleCommandNode,
+    stdin: string,
+  ): Promise<ExecResult> {
+    // Clear expansion stderr at the start
+    this.ctx.state.expansionStderr = "";
     const tempAssignments: Record<string, string | undefined> = {};
 
     for (const assignment of node.assignments) {
       const name = assignment.name;
+
+      // Handle array assignment: VAR=(a b c) or VAR+=(a b c)
+      // Each element can be a glob that expands to multiple values
+      if (assignment.array) {
+        // Check if trying to assign array to subscripted element: a[0]=(1 2) is invalid
+        // This should be a runtime error (exit code 1) not a parse error
+        if (/\[.+\]$/.test(name)) {
+          // Bash outputs to stderr and returns exit code 1
+          return result(
+            "",
+            `bash: ${name}: cannot assign list to array member\n`,
+            1,
+          );
+        }
+        // Check if array variable is readonly
+        const readonlyError = checkReadonlyError(this.ctx, name);
+        if (readonlyError) return readonlyError;
+        const allElements: string[] = [];
+        for (const element of assignment.array) {
+          const expanded = await expandWordWithGlob(this.ctx, element);
+          allElements.push(...expanded.values);
+        }
+
+        // For append mode (+=), find the max existing index and start after it
+        let startIndex = 0;
+        if (assignment.append) {
+          const elements = getArrayElements(this.ctx, name);
+          if (elements.length > 0) {
+            const maxIndex = Math.max(
+              ...elements.map(([idx]) => (typeof idx === "number" ? idx : 0)),
+            );
+            startIndex = maxIndex + 1;
+          }
+        } else {
+          // For regular assignment, clear existing array elements
+          const prefix = `${name}_`;
+          for (const key of Object.keys(this.ctx.state.env)) {
+            if (key.startsWith(prefix) && !key.includes("__")) {
+              delete this.ctx.state.env[key];
+            }
+          }
+        }
+
+        for (let i = 0; i < allElements.length; i++) {
+          this.ctx.state.env[`${name}_${startIndex + i}`] = allElements[i];
+        }
+        // Update length only for non-append (length tracking is not reliable with sparse arrays)
+        if (!assignment.append) {
+          this.ctx.state.env[`${name}__length`] = String(allElements.length);
+        }
+        continue;
+      }
+
       const value = assignment.value
         ? await expandWord(this.ctx, assignment.value)
         : "";
 
+      // Check for empty subscript assignment: a[]=value is invalid
+      const emptySubscriptMatch = name.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\[\]$/);
+      if (emptySubscriptMatch) {
+        return result("", `bash: ${name}: bad array subscript\n`, 1);
+      }
+
+      // Check for array subscript assignment: a[subscript]=value
+      const subscriptMatch = name.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\[(.+)\]$/);
+      if (subscriptMatch) {
+        const arrayName = subscriptMatch[1];
+        const subscriptExpr = subscriptMatch[2];
+
+        // Check if array variable is readonly
+        const readonlyError = checkReadonlyError(this.ctx, arrayName);
+        if (readonlyError) return readonlyError;
+
+        const isAssoc = this.ctx.state.associativeArrays?.has(arrayName);
+        let envKey: string;
+
+        if (isAssoc) {
+          // For associative arrays, expand variables in subscript first, then use as key
+          // e.g., foo["$key"]=value where key=bar should set foo_bar
+          let key: string;
+          if (subscriptExpr.startsWith("'") && subscriptExpr.endsWith("'")) {
+            // Single-quoted: literal value, no expansion
+            key = subscriptExpr.slice(1, -1);
+          } else if (
+            subscriptExpr.startsWith('"') &&
+            subscriptExpr.endsWith('"')
+          ) {
+            // Double-quoted: expand variables inside
+            const inner = subscriptExpr.slice(1, -1);
+            const parser = new Parser();
+            const wordNode = parser.parseWordFromString(inner, true, false);
+            key = await expandWord(this.ctx, wordNode);
+          } else if (subscriptExpr.includes("$")) {
+            // Unquoted with variable reference
+            const parser = new Parser();
+            const wordNode = parser.parseWordFromString(
+              subscriptExpr,
+              false,
+              false,
+            );
+            key = await expandWord(this.ctx, wordNode);
+          } else {
+            // Plain literal
+            key = subscriptExpr;
+          }
+          envKey = `${arrayName}_${key}`;
+        } else {
+          // Evaluate subscript as arithmetic expression for indexed arrays
+          // This handles: a[0], a[x], a[x+1], a[a[0]], a[b=2], etc.
+          let index: number;
+          if (/^-?\d+$/.test(subscriptExpr)) {
+            // Simple numeric subscript
+            index = Number.parseInt(subscriptExpr, 10);
+          } else {
+            // Parse and evaluate as arithmetic expression
+            try {
+              const parser = new Parser();
+              const arithAst = parseArithmeticExpression(parser, subscriptExpr);
+              index = evaluateArithmeticSync(this.ctx, arithAst.expression);
+            } catch {
+              // Fall back to variable lookup for backwards compatibility
+              const varValue = this.ctx.state.env[subscriptExpr];
+              index = varValue ? Number.parseInt(varValue, 10) : 0;
+            }
+            if (Number.isNaN(index)) index = 0;
+          }
+
+          // Handle negative indices - bash counts from max_index + 1
+          if (index < 0) {
+            const elements = getArrayElements(this.ctx, arrayName);
+            if (elements.length === 0) {
+              // Empty array with negative index - error
+              return result(
+                "",
+                `bash: ${arrayName}[${subscriptExpr}]: bad array subscript\n`,
+                1,
+              );
+            }
+            // Find the maximum index
+            const maxIndex = Math.max(
+              ...elements.map(([idx]) => (typeof idx === "number" ? idx : 0)),
+            );
+            index = maxIndex + 1 + index;
+            if (index < 0) {
+              // Out-of-bounds negative index - return error result
+              return result(
+                "",
+                `bash: ${arrayName}[${subscriptExpr}]: bad array subscript\n`,
+                1,
+              );
+            }
+          }
+
+          envKey = `${arrayName}_${index}`;
+        }
+
+        // Handle append mode (+=)
+        const finalValue = assignment.append
+          ? (this.ctx.state.env[envKey] || "") + value
+          : value;
+
+        if (node.name) {
+          tempAssignments[envKey] = this.ctx.state.env[envKey];
+          this.ctx.state.env[envKey] = finalValue;
+        } else {
+          this.ctx.state.env[envKey] = finalValue;
+        }
+        continue;
+      }
+
+      // Check if variable is readonly (for scalar assignment)
+      const readonlyError = checkReadonlyError(this.ctx, name);
+      if (readonlyError) return readonlyError;
+
+      // Handle append mode (+=)
+      const finalValue = assignment.append
+        ? (this.ctx.state.env[name] || "") + value
+        : value;
+
       if (node.name) {
         tempAssignments[name] = this.ctx.state.env[name];
-        this.ctx.state.env[name] = value;
+        this.ctx.state.env[name] = finalValue;
       } else {
-        this.ctx.state.env[name] = value;
+        this.ctx.state.env[name] = finalValue;
       }
     }
 
     if (!node.name) {
-      return { stdout: "", stderr: "", exitCode: 0 };
+      // Assignment-only command: preserve the exit code from command substitution
+      // e.g., x=$(false) should set $? to 1, not 0
+      return result("", "", this.ctx.state.lastExitCode);
     }
 
     for (const redir of node.redirections) {
@@ -307,7 +594,15 @@ export class Interpreter {
         redir.target.type === "HereDoc"
       ) {
         const hereDoc = redir.target as HereDocNode;
-        stdin = await expandWord(this.ctx, hereDoc.content);
+        let content = await expandWord(this.ctx, hereDoc.content);
+        // <<- strips leading tabs from each line
+        if (hereDoc.stripTabs) {
+          content = content
+            .split("\n")
+            .map((line) => line.replace(/^\t+/, ""))
+            .join("\n");
+        }
+        stdin = content;
         continue;
       }
 
@@ -327,19 +622,17 @@ export class Interpreter {
             if (value === undefined) delete this.ctx.state.env[name];
             else this.ctx.state.env[name] = value;
           }
-          return {
-            stdout: "",
-            stderr: `bash: ${target}: No such file or directory\n`,
-            exitCode: 1,
-          };
+          return failure(`bash: ${target}: No such file or directory\n`);
         }
       }
     }
 
     const commandName = await expandWord(this.ctx, node.name);
+
     const args: string[] = [];
     const quotedArgs: boolean[] = [];
 
+    // Expand args even if command name is empty (they may have side effects)
     for (const arg of node.args) {
       const expanded = await expandWordWithGlob(this.ctx, arg);
       for (const value of expanded.values) {
@@ -348,15 +641,60 @@ export class Interpreter {
       }
     }
 
-    let result = await this.runCommand(commandName, args, quotedArgs, stdin);
-    result = await applyRedirections(this.ctx, result, node.redirections);
+    // Handle empty command name specially
+    // If the command word contains ONLY command substitutions/expansions and expands
+    // to empty, word-splitting removes the empty result. If there are args, the first
+    // arg becomes the command name. This matches bash behavior:
+    // - x=''; $x is a no-op (empty, no args)
+    // - x=''; $x Y runs command Y (empty command name, Y becomes command)
+    // - `true` X runs command X (since `true` outputs nothing)
+    // However, a literal empty string (like '') is "command not found".
+    if (!commandName) {
+      const isOnlyExpansions = node.name.parts.every(
+        (p) =>
+          p.type === "CommandSubstitution" ||
+          p.type === "ParameterExpansion" ||
+          p.type === "ArithmeticExpansion",
+      );
+      if (isOnlyExpansions) {
+        // Empty result from variable/command substitution - word split removes it
+        // If there are args, the first arg becomes the command name
+        if (args.length > 0) {
+          const newCommandName = args.shift() as string;
+          quotedArgs.shift();
+          return await this.runCommand(newCommandName, args, quotedArgs, stdin);
+        }
+        // No args - treat as no-op (status 0)
+        // Preserve lastExitCode for command subs like $(exit 42)
+        return result("", "", this.ctx.state.lastExitCode);
+      }
+      // Literal empty command name - command not found
+      return failure("bash: : command not found\n", 127);
+    }
+
+    let cmdResult = await this.runCommand(commandName, args, quotedArgs, stdin);
+    cmdResult = await applyRedirections(this.ctx, cmdResult, node.redirections);
+
+    // Update $_ to the last argument of this command (after expansion)
+    // If no arguments, $_ is set to the command name
+    this.ctx.state.lastArg =
+      args.length > 0 ? args[args.length - 1] : commandName;
 
     for (const [name, value] of Object.entries(tempAssignments)) {
       if (value === undefined) delete this.ctx.state.env[name];
       else this.ctx.state.env[name] = value;
     }
 
-    return result;
+    // Include any stderr from expansion errors
+    if (this.ctx.state.expansionStderr) {
+      cmdResult = {
+        ...cmdResult,
+        stderr: this.ctx.state.expansionStderr + cmdResult.stderr,
+      };
+      this.ctx.state.expansionStderr = "";
+    }
+
+    return cmdResult;
   }
 
   private async runCommand(
@@ -364,6 +702,7 @@ export class Interpreter {
     args: string[],
     _quotedArgs: boolean[],
     stdin: string,
+    skipFunctions = false,
   ): Promise<ExecResult> {
     // Built-in commands
     if (commandName === "cd") {
@@ -390,11 +729,91 @@ export class Interpreter {
     if (commandName === "continue") {
       return handleContinue(this.ctx, args);
     }
+    if (commandName === "return") {
+      return handleReturn(this.ctx, args);
+    }
+    if (commandName === "eval") {
+      return handleEval(this.ctx, args);
+    }
+    if (commandName === "shift") {
+      return handleShift(this.ctx, args);
+    }
     if (commandName === "source" || commandName === ".") {
       return handleSource(this.ctx, args);
     }
     if (commandName === "read") {
       return handleRead(this.ctx, args, stdin);
+    }
+    if (commandName === "declare" || commandName === "typeset") {
+      return handleDeclare(this.ctx, args);
+    }
+    if (commandName === "readonly") {
+      return handleReadonly(this.ctx, args);
+    }
+    // User-defined functions override most builtins (except special ones above)
+    // This needs to happen before true/false/let which are regular builtins
+    if (!skipFunctions) {
+      const func = this.ctx.state.functions.get(commandName);
+      if (func) {
+        return callFunction(this.ctx, func, args);
+      }
+    }
+    // Simple builtins (can be overridden by functions)
+    if (commandName === ":" || commandName === "true") {
+      return OK;
+    }
+    if (commandName === "false") {
+      return testResult(false);
+    }
+    if (commandName === "let") {
+      return handleLet(this.ctx, args);
+    }
+    if (commandName === "command") {
+      // command [-pVv] command [arg...] - run command, bypassing functions
+      if (args.length === 0) {
+        return OK;
+      }
+      let cmdArgs = args;
+      // Skip -v, -V, -p options for now (just run the command)
+      while (cmdArgs.length > 0 && cmdArgs[0].startsWith("-")) {
+        cmdArgs = cmdArgs.slice(1);
+      }
+      if (cmdArgs.length === 0) {
+        return OK;
+      }
+      // Run command without checking functions, but builtins are still available
+      const [cmd, ...rest] = cmdArgs;
+      return this.runCommand(cmd, rest, [], stdin, true);
+    }
+    if (commandName === "builtin") {
+      // builtin command [arg...] - run builtin command
+      if (args.length === 0) {
+        return OK;
+      }
+      const [cmd, ...rest] = args;
+      // Run as builtin (recursive call, but skip function lookup)
+      return this.runCommand(cmd, rest, [], stdin);
+    }
+    if (commandName === "shopt") {
+      // shopt - shell options (stub implementation)
+      // Accept -s (set) and -u (unset) but don't actually change behavior
+      return OK;
+    }
+    if (commandName === "exec") {
+      // exec - replace shell with command (stub: just run the command)
+      if (args.length === 0) {
+        return OK;
+      }
+      const [cmd, ...rest] = args;
+      return this.runCommand(cmd, rest, [], stdin);
+    }
+    if (commandName === "wait") {
+      // wait - wait for background jobs (stub: no-op in this context)
+      return OK;
+    }
+    if (commandName === "type") {
+      // type - describe commands
+      return this.handleType(args);
     }
     // Test commands
     if (commandName === "[[") {
@@ -403,23 +822,17 @@ export class Interpreter {
         const testArgs = args.slice(0, endIdx);
         return evaluateTestArgs(this.ctx, testArgs);
       }
-      return { stdout: "", stderr: "bash: [[: missing `]]'\n", exitCode: 2 };
+      return failure("bash: [[: missing `]]'\n", 2);
     }
     if (commandName === "[" || commandName === "test") {
       let testArgs = args;
       if (commandName === "[") {
         if (args[args.length - 1] !== "]") {
-          return { stdout: "", stderr: "[: missing `]'\n", exitCode: 2 };
+          return failure("[: missing `]'\n", 2);
         }
         testArgs = args.slice(0, -1);
       }
       return evaluateTestArgs(this.ctx, testArgs);
-    }
-
-    // User-defined functions
-    const func = this.ctx.state.functions.get(commandName);
-    if (func) {
-      return callFunction(this.ctx, func, args);
     }
 
     // External commands
@@ -430,11 +843,7 @@ export class Interpreter {
 
     const cmd = this.ctx.commands.get(cmdName);
     if (!cmd) {
-      return {
-        stdout: "",
-        stderr: `bash: ${commandName}: command not found\n`,
-        exitCode: 127,
-      };
+      return failure(`bash: ${commandName}: command not found\n`, 127);
     }
 
     const cmdCtx: CommandContext = {
@@ -451,22 +860,114 @@ export class Interpreter {
     try {
       return await cmd.execute(args, cmdCtx);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        stdout: "",
-        stderr: `${commandName}: ${message}\n`,
-        exitCode: 1,
-      };
+      return failure(`${commandName}: ${getErrorMessage(error)}\n`);
     }
+  }
+
+  // ===========================================================================
+  // TYPE COMMAND
+  // ===========================================================================
+
+  private handleType(args: string[]): ExecResult {
+    // Shell keywords
+    const keywords = new Set([
+      "if",
+      "then",
+      "else",
+      "elif",
+      "fi",
+      "case",
+      "esac",
+      "for",
+      "select",
+      "while",
+      "until",
+      "do",
+      "done",
+      "in",
+      "function",
+      "{",
+      "}",
+      "time",
+      "[[",
+      "]]",
+      "!",
+    ]);
+
+    // Shell builtins
+    const builtins = new Set([
+      "cd",
+      "export",
+      "unset",
+      "exit",
+      "local",
+      "set",
+      "break",
+      "continue",
+      "return",
+      "eval",
+      "shift",
+      "source",
+      ".",
+      "read",
+      "declare",
+      "typeset",
+      "readonly",
+      ":",
+      "true",
+      "false",
+      "let",
+      "command",
+      "builtin",
+      "shopt",
+      "exec",
+      "wait",
+      "type",
+      "[",
+      "test",
+    ]);
+
+    let stdout = "";
+    let stderr = "";
+    let exitCode = 0;
+
+    for (const name of args) {
+      if (keywords.has(name)) {
+        stdout += `${name} is a shell keyword\n`;
+      } else if (builtins.has(name)) {
+        stdout += `${name} is a shell builtin\n`;
+      } else if (this.ctx.state.functions.has(name)) {
+        stdout += `${name} is a function\n`;
+      } else if (this.ctx.commands.has(name)) {
+        stdout += `${name} is /bin/${name}\n`;
+      } else {
+        stderr += `bash: type: ${name}: not found\n`;
+        exitCode = 1;
+      }
+    }
+
+    return result(stdout, stderr, exitCode);
   }
 
   // ===========================================================================
   // SUBSHELL AND GROUP EXECUTION
   // ===========================================================================
 
-  private async executeSubshell(node: SubshellNode): Promise<ExecResult> {
+  private async executeSubshell(
+    node: SubshellNode,
+    stdin = "",
+  ): Promise<ExecResult> {
     const savedEnv = { ...this.ctx.state.env };
     const savedCwd = this.ctx.state.cwd;
+    // Reset loopDepth in subshell - break/continue should not affect parent loops
+    const savedLoopDepth = this.ctx.state.loopDepth;
+    this.ctx.state.loopDepth = 0;
+
+    // Save any existing groupStdin and set new one from pipeline
+    const savedGroupStdin = this.ctx.state.groupStdin;
+    if (stdin) {
+      this.ctx.state.groupStdin = stdin;
+    }
 
     let stdout = "";
     let stderr = "";
@@ -482,30 +983,55 @@ export class Interpreter {
     } catch (error) {
       this.ctx.state.env = savedEnv;
       this.ctx.state.cwd = savedCwd;
+      this.ctx.state.loopDepth = savedLoopDepth;
+      this.ctx.state.groupStdin = savedGroupStdin;
+      // BreakError/ContinueError should NOT propagate out of subshell
+      // They only affect loops within the subshell
       if (error instanceof BreakError || error instanceof ContinueError) {
-        error.stdout = stdout + error.stdout;
-        error.stderr = stderr + error.stderr;
-        throw error;
+        stdout += error.stdout;
+        stderr += error.stderr;
+        return result(stdout, stderr, 0);
+      }
+      // ExitError in subshell should NOT propagate - just return the exit code
+      // (subshells are like separate processes)
+      if (error instanceof ExitError) {
+        stdout += error.stdout;
+        stderr += error.stderr;
+        return result(stdout, stderr, error.exitCode);
+      }
+      // ReturnError in subshell (e.g., f() ( return 42; )) should also just exit
+      // with the given code, since subshells are like separate processes
+      if (error instanceof ReturnError) {
+        stdout += error.stdout;
+        stderr += error.stderr;
+        return result(stdout, stderr, error.exitCode);
       }
       if (error instanceof ErrexitError) {
         error.stdout = stdout + error.stdout;
         error.stderr = stderr + error.stderr;
         throw error;
       }
-      const message = error instanceof Error ? error.message : String(error);
-      return { stdout, stderr: `${stderr + message}\n`, exitCode: 1 };
+      return result(stdout, `${stderr}${getErrorMessage(error)}\n`, 1);
     }
 
     this.ctx.state.env = savedEnv;
     this.ctx.state.cwd = savedCwd;
+    this.ctx.state.loopDepth = savedLoopDepth;
+    this.ctx.state.groupStdin = savedGroupStdin;
 
-    return { stdout, stderr, exitCode };
+    return result(stdout, stderr, exitCode);
   }
 
-  private async executeGroup(node: GroupNode): Promise<ExecResult> {
+  private async executeGroup(node: GroupNode, stdin = ""): Promise<ExecResult> {
     let stdout = "";
     let stderr = "";
     let exitCode = 0;
+
+    // Save any existing groupStdin and set new one from pipeline
+    const savedGroupStdin = this.ctx.state.groupStdin;
+    if (stdin) {
+      this.ctx.state.groupStdin = stdin;
+    }
 
     try {
       for (const stmt of node.body) {
@@ -515,37 +1041,42 @@ export class Interpreter {
         exitCode = result.exitCode;
       }
     } catch (error) {
-      if (error instanceof BreakError || error instanceof ContinueError) {
-        error.stdout = stdout + error.stdout;
-        error.stderr = stderr + error.stderr;
+      // Restore groupStdin before handling error
+      this.ctx.state.groupStdin = savedGroupStdin;
+      if (
+        isScopeExitError(error) ||
+        error instanceof ErrexitError ||
+        error instanceof ExitError
+      ) {
+        error.prependOutput(stdout, stderr);
         throw error;
       }
-      if (error instanceof ErrexitError) {
-        error.stdout = stdout + error.stdout;
-        error.stderr = stderr + error.stderr;
-        throw error;
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      return { stdout, stderr: `${stderr + message}\n`, exitCode: 1 };
+      return result(stdout, `${stderr}${getErrorMessage(error)}\n`, 1);
     }
 
-    return { stdout, stderr, exitCode };
+    // Restore groupStdin
+    this.ctx.state.groupStdin = savedGroupStdin;
+
+    return result(stdout, stderr, exitCode);
   }
 
   // ===========================================================================
   // COMPOUND COMMANDS
   // ===========================================================================
 
-  private executeArithmeticCommand(node: ArithmeticCommandNode): ExecResult {
+  private async executeArithmeticCommand(
+    node: ArithmeticCommandNode,
+  ): Promise<ExecResult> {
     try {
-      const result = evaluateArithmetic(this.ctx, node.expression.expression);
-      return { stdout: "", stderr: "", exitCode: result === 0 ? 1 : 0 };
+      const arithResult = await evaluateArithmetic(
+        this.ctx,
+        node.expression.expression,
+      );
+      return testResult(arithResult !== 0);
     } catch (error) {
-      return {
-        stdout: "",
-        stderr: `bash: arithmetic expression: ${(error as Error).message}\n`,
-        exitCode: 1,
-      };
+      return failure(
+        `bash: arithmetic expression: ${(error as Error).message}\n`,
+      );
     }
   }
 
@@ -553,14 +1084,13 @@ export class Interpreter {
     node: ConditionalCommandNode,
   ): Promise<ExecResult> {
     try {
-      const result = await evaluateConditional(this.ctx, node.expression);
-      return { stdout: "", stderr: "", exitCode: result ? 0 : 1 };
+      const condResult = await evaluateConditional(this.ctx, node.expression);
+      return testResult(condResult);
     } catch (error) {
-      return {
-        stdout: "",
-        stderr: `bash: conditional expression: ${(error as Error).message}\n`,
-        exitCode: 2,
-      };
+      return failure(
+        `bash: conditional expression: ${(error as Error).message}\n`,
+        2,
+      );
     }
   }
 }

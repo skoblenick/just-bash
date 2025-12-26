@@ -4,37 +4,77 @@
 
 import { type ParseException, parse } from "../../parser/parser.js";
 import type { ExecResult } from "../../types.js";
+import { ExitError, ReturnError } from "../errors.js";
+import { failure, result } from "../helpers/result.js";
 import type { InterpreterContext } from "../types.js";
 
 export async function handleSource(
   ctx: InterpreterContext,
   args: string[],
 ): Promise<ExecResult> {
-  if (args.length === 0) {
-    return {
-      stdout: "",
-      stderr: "bash: source: filename argument required\n",
-      exitCode: 2,
-    };
+  // Handle -- to end options (ignored like bash does)
+  let sourceArgs = args;
+  if (sourceArgs.length > 0 && sourceArgs[0] === "--") {
+    sourceArgs = sourceArgs.slice(1);
   }
 
-  const filename = args[0];
-  const filePath = ctx.fs.resolvePath(ctx.state.cwd, filename);
+  if (sourceArgs.length === 0) {
+    return result("", "bash: source: filename argument required\n", 2);
+  }
 
-  let content: string;
-  try {
-    content = await ctx.fs.readFile(filePath);
-  } catch {
-    return {
-      stdout: "",
-      stderr: `bash: ${filename}: No such file or directory\n`,
-      exitCode: 1,
-    };
+  const filename = sourceArgs[0];
+  let _resolvedPath: string | null = null;
+  let content: string | null = null;
+
+  // If filename contains '/', use it directly (relative or absolute path)
+  if (filename.includes("/")) {
+    const directPath = ctx.fs.resolvePath(ctx.state.cwd, filename);
+    try {
+      content = await ctx.fs.readFile(directPath);
+      _resolvedPath = directPath;
+    } catch {
+      // File not found
+    }
+  } else {
+    // Filename doesn't contain '/' - search in PATH first, then current directory
+    const pathEnv = ctx.state.env.PATH || "";
+    const pathDirs = pathEnv.split(":").filter((d) => d);
+
+    for (const dir of pathDirs) {
+      const candidate = ctx.fs.resolvePath(ctx.state.cwd, `${dir}/${filename}`);
+      try {
+        // Check if it's a regular file (not a directory)
+        const stat = await ctx.fs.stat(candidate);
+        if (stat.isDirectory) {
+          continue; // Skip directories
+        }
+        content = await ctx.fs.readFile(candidate);
+        _resolvedPath = candidate;
+        break;
+      } catch {
+        // File doesn't exist in this PATH directory, continue searching
+      }
+    }
+
+    // If not found in PATH, try current directory
+    if (content === null) {
+      const directPath = ctx.fs.resolvePath(ctx.state.cwd, filename);
+      try {
+        content = await ctx.fs.readFile(directPath);
+        _resolvedPath = directPath;
+      } catch {
+        // File not found
+      }
+    }
+  }
+
+  if (content === null) {
+    return failure(`bash: ${filename}: No such file or directory\n`);
   }
 
   // Save and set positional parameters from additional args
   const savedPositional: Record<string, string | undefined> = {};
-  if (args.length > 1) {
+  if (sourceArgs.length > 1) {
     // Save current positional parameters
     for (let i = 1; i <= 9; i++) {
       savedPositional[String(i)] = ctx.state.env[String(i)];
@@ -43,7 +83,7 @@ export async function handleSource(
     savedPositional["@"] = ctx.state.env["@"];
 
     // Set new positional parameters
-    const scriptArgs = args.slice(1);
+    const scriptArgs = sourceArgs.slice(1);
     ctx.state.env["#"] = String(scriptArgs.length);
     ctx.state.env["@"] = scriptArgs.join(" ");
     for (let i = 0; i < scriptArgs.length && i < 9; i++) {
@@ -55,40 +95,41 @@ export async function handleSource(
     }
   }
 
+  const cleanup = (): void => {
+    ctx.state.sourceDepth--;
+    // Restore positional parameters if we changed them
+    if (sourceArgs.length > 1) {
+      for (const [key, value] of Object.entries(savedPositional)) {
+        if (value === undefined) {
+          delete ctx.state.env[key];
+        } else {
+          ctx.state.env[key] = value;
+        }
+      }
+    }
+  };
+
+  ctx.state.sourceDepth++;
   try {
     const ast = parse(content);
     const result = await ctx.executeScript(ast);
-
-    // Restore positional parameters if we changed them
-    if (args.length > 1) {
-      for (const [key, value] of Object.entries(savedPositional)) {
-        if (value === undefined) {
-          delete ctx.state.env[key];
-        } else {
-          ctx.state.env[key] = value;
-        }
-      }
-    }
-
+    cleanup();
     return result;
   } catch (error) {
-    // Restore positional parameters on error
-    if (args.length > 1) {
-      for (const [key, value] of Object.entries(savedPositional)) {
-        if (value === undefined) {
-          delete ctx.state.env[key];
-        } else {
-          ctx.state.env[key] = value;
-        }
-      }
+    cleanup();
+
+    // ExitError propagates up to exit the shell
+    if (error instanceof ExitError) {
+      throw error;
+    }
+
+    // Handle return in sourced script - treat as normal exit
+    if (error instanceof ReturnError) {
+      return result(error.stdout, error.stderr, error.exitCode);
     }
 
     if ((error as ParseException).name === "ParseException") {
-      return {
-        stdout: "",
-        stderr: `bash: ${filename}: ${(error as Error).message}\n`,
-        exitCode: 2,
-      };
+      return failure(`bash: ${filename}: ${(error as Error).message}\n`);
     }
     throw error;
   }
