@@ -24,17 +24,22 @@ export function parseKeySpec(spec: string): KeySpec | null {
   let mainSpec = spec;
 
   // Find where modifiers start (after all digits, dots, and commas)
-  const modifierMatch = mainSpec.match(/([nrfb]+)$/i);
+  // Valid modifiers: b d f h M n r V
+  const modifierMatch = mainSpec.match(/([bdfhMnrV]+)$/);
   if (modifierMatch) {
-    modifierStr = modifierMatch[1].toLowerCase();
+    modifierStr = modifierMatch[1];
     mainSpec = mainSpec.slice(0, -modifierStr.length);
   }
 
-  // Parse modifiers
+  // Parse modifiers (case-sensitive: M and V are uppercase)
   if (modifierStr.includes("n")) result.numeric = true;
   if (modifierStr.includes("r")) result.reverse = true;
   if (modifierStr.includes("f")) result.ignoreCase = true;
   if (modifierStr.includes("b")) result.ignoreLeading = true;
+  if (modifierStr.includes("h")) result.humanNumeric = true;
+  if (modifierStr.includes("V")) result.versionSort = true;
+  if (modifierStr.includes("d")) result.dictionaryOrder = true;
+  if (modifierStr.includes("M")) result.monthSort = true;
 
   // Split by comma for start and end
   const parts = mainSpec.split(",");
@@ -62,13 +67,17 @@ export function parseKeySpec(spec: string): KeySpec | null {
   if (parts.length > 1 && parts[1]) {
     // End part might have trailing modifiers too
     let endPart = parts[1];
-    const endModifierMatch = endPart.match(/([nrfb]+)$/i);
+    const endModifierMatch = endPart.match(/([bdfhMnrV]+)$/);
     if (endModifierMatch) {
-      const endModifiers = endModifierMatch[1].toLowerCase();
+      const endModifiers = endModifierMatch[1];
       if (endModifiers.includes("n")) result.numeric = true;
       if (endModifiers.includes("r")) result.reverse = true;
       if (endModifiers.includes("f")) result.ignoreCase = true;
       if (endModifiers.includes("b")) result.ignoreLeading = true;
+      if (endModifiers.includes("h")) result.humanNumeric = true;
+      if (endModifiers.includes("V")) result.versionSort = true;
+      if (endModifiers.includes("d")) result.dictionaryOrder = true;
+      if (endModifiers.includes("M")) result.monthSort = true;
       endPart = endPart.slice(0, -endModifiers.length);
     }
 

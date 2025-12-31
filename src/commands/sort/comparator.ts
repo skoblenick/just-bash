@@ -2,6 +2,94 @@
 
 import type { KeySpec, SortOptions } from "./types.js";
 
+// Human-readable size suffixes (case insensitive)
+const SIZE_SUFFIXES: Record<string, number> = {
+  "": 1,
+  k: 1024,
+  m: 1024 ** 2,
+  g: 1024 ** 3,
+  t: 1024 ** 4,
+  p: 1024 ** 5,
+  e: 1024 ** 6,
+};
+
+// Month names for -M
+const MONTHS: Record<string, number> = {
+  jan: 1,
+  feb: 2,
+  mar: 3,
+  apr: 4,
+  may: 5,
+  jun: 6,
+  jul: 7,
+  aug: 8,
+  sep: 9,
+  oct: 10,
+  nov: 11,
+  dec: 12,
+};
+
+/**
+ * Parse a human-readable size like "1K", "2.5M", "3G"
+ */
+function parseHumanSize(s: string): number {
+  const trimmed = s.trim();
+  const match = trimmed.match(
+    /^([+-]?\d*\.?\d+)\s*([kmgtpeKMGTPE])?[iI]?[bB]?$/,
+  );
+  if (!match) {
+    // Try to parse as plain number
+    const num = parseFloat(trimmed);
+    return Number.isNaN(num) ? 0 : num;
+  }
+  const num = parseFloat(match[1]);
+  const suffix = (match[2] || "").toLowerCase();
+  const multiplier = SIZE_SUFFIXES[suffix] || 1;
+  return num * multiplier;
+}
+
+/**
+ * Parse month name and return sort order (0 for unknown)
+ */
+function parseMonth(s: string): number {
+  const trimmed = s.trim().toLowerCase().slice(0, 3);
+  return MONTHS[trimmed] || 0;
+}
+
+/**
+ * Compare version strings naturally (e.g., "1.2" < "1.10")
+ */
+function compareVersions(a: string, b: string): number {
+  const partsA = a.split(/(\d+)/);
+  const partsB = b.split(/(\d+)/);
+  const maxLen = Math.max(partsA.length, partsB.length);
+
+  for (let i = 0; i < maxLen; i++) {
+    const partA = partsA[i] || "";
+    const partB = partsB[i] || "";
+
+    // Check if both parts are numeric
+    const numA = /^\d+$/.test(partA) ? parseInt(partA, 10) : null;
+    const numB = /^\d+$/.test(partB) ? parseInt(partB, 10) : null;
+
+    if (numA !== null && numB !== null) {
+      // Both numeric - compare as numbers
+      if (numA !== numB) return numA - numB;
+    } else {
+      // At least one is non-numeric - compare as strings
+      if (partA !== partB) return partA.localeCompare(partB);
+    }
+  }
+  return 0;
+}
+
+/**
+ * Apply dictionary order: keep only alphanumeric and blanks
+ */
+function toDictionaryOrder(s: string): string {
+  return s.replace(/[^a-zA-Z0-9\s]/g, "");
+}
+
 /**
  * Extract key value from a line based on key specification
  */
@@ -75,29 +163,61 @@ function extractKeyValue(
   return result;
 }
 
-/**
- * Compare two values, handling numeric and string comparison
- */
-function compareValues(
-  a: string,
-  b: string,
-  numeric: boolean,
-  ignoreCase: boolean,
-): number {
-  if (numeric) {
-    const numA = parseFloat(a) || 0;
-    const numB = parseFloat(b) || 0;
-    return numA - numB;
-  }
+interface CompareOptions {
+  numeric?: boolean;
+  ignoreCase?: boolean;
+  humanNumeric?: boolean;
+  versionSort?: boolean;
+  dictionaryOrder?: boolean;
+  monthSort?: boolean;
+}
 
+/**
+ * Compare two values, handling various sort modes
+ */
+function compareValues(a: string, b: string, opts: CompareOptions): number {
   let valA = a;
   let valB = b;
 
-  if (ignoreCase) {
+  // Apply dictionary order first (removes non-alphanumeric)
+  if (opts.dictionaryOrder) {
+    valA = toDictionaryOrder(valA);
+    valB = toDictionaryOrder(valB);
+  }
+
+  // Apply case folding
+  if (opts.ignoreCase) {
     valA = valA.toLowerCase();
     valB = valB.toLowerCase();
   }
 
+  // Month sort
+  if (opts.monthSort) {
+    const monthA = parseMonth(valA);
+    const monthB = parseMonth(valB);
+    return monthA - monthB;
+  }
+
+  // Human numeric sort (1K, 2M, etc.)
+  if (opts.humanNumeric) {
+    const sizeA = parseHumanSize(valA);
+    const sizeB = parseHumanSize(valB);
+    return sizeA - sizeB;
+  }
+
+  // Version sort
+  if (opts.versionSort) {
+    return compareVersions(valA, valB);
+  }
+
+  // Numeric sort
+  if (opts.numeric) {
+    const numA = parseFloat(valA) || 0;
+    const numB = parseFloat(valB) || 0;
+    return numA - numB;
+  }
+
+  // String comparison
   return valA.localeCompare(valB);
 }
 
@@ -113,57 +233,84 @@ export function createComparator(
     numeric: globalNumeric,
     ignoreCase: globalIgnoreCase,
     reverse: globalReverse,
+    humanNumeric: globalHumanNumeric,
+    versionSort: globalVersionSort,
+    dictionaryOrder: globalDictionaryOrder,
+    monthSort: globalMonthSort,
+    ignoreLeadingBlanks: globalIgnoreLeadingBlanks,
+    stable: globalStable,
   } = options;
 
   return (a: string, b: string): number => {
+    let lineA = a;
+    let lineB = b;
+
+    // Apply ignore leading blanks globally
+    if (globalIgnoreLeadingBlanks) {
+      lineA = lineA.trimStart();
+      lineB = lineB.trimStart();
+    }
+
     // If no keys specified, compare whole lines
     if (keys.length === 0) {
-      let valA = a;
-      let valB = b;
+      const opts: CompareOptions = {
+        numeric: globalNumeric,
+        ignoreCase: globalIgnoreCase,
+        humanNumeric: globalHumanNumeric,
+        versionSort: globalVersionSort,
+        dictionaryOrder: globalDictionaryOrder,
+        monthSort: globalMonthSort,
+      };
 
-      if (globalIgnoreCase) {
-        valA = valA.toLowerCase();
-        valB = valB.toLowerCase();
+      const result = compareValues(lineA, lineB, opts);
+
+      if (result !== 0) {
+        return globalReverse ? -result : result;
       }
 
-      let result: number;
-      if (globalNumeric) {
-        const numA = parseFloat(valA) || 0;
-        const numB = parseFloat(valB) || 0;
-        result = numA - numB;
-        // Add string tiebreaker when numeric values are equal
-        if (result === 0) {
-          const tiebreaker = valA.localeCompare(valB);
-          return globalReverse ? -tiebreaker : tiebreaker;
-        }
-      } else {
-        result = valA.localeCompare(valB);
+      // Tiebreaker: use original lines unless stable sort
+      if (!globalStable) {
+        const tiebreaker = a.localeCompare(b);
+        return globalReverse ? -tiebreaker : tiebreaker;
       }
-
-      return globalReverse ? -result : result;
+      return 0;
     }
 
     // Compare by each key in order
     for (const key of keys) {
-      const valA = extractKeyValue(a, key, fieldDelimiter);
-      const valB = extractKeyValue(b, key, fieldDelimiter);
+      let valA = extractKeyValue(lineA, key, fieldDelimiter);
+      let valB = extractKeyValue(lineB, key, fieldDelimiter);
+
+      // Apply per-key ignore leading blanks
+      if (key.ignoreLeading) {
+        valA = valA.trimStart();
+        valB = valB.trimStart();
+      }
 
       // Use per-key modifiers or fall back to global options
-      const useNumeric = key.numeric ?? globalNumeric;
-      const useIgnoreCase = key.ignoreCase ?? globalIgnoreCase;
+      const opts: CompareOptions = {
+        numeric: key.numeric ?? globalNumeric,
+        ignoreCase: key.ignoreCase ?? globalIgnoreCase,
+        humanNumeric: key.humanNumeric ?? globalHumanNumeric,
+        versionSort: key.versionSort ?? globalVersionSort,
+        dictionaryOrder: key.dictionaryOrder ?? globalDictionaryOrder,
+        monthSort: key.monthSort ?? globalMonthSort,
+      };
       const useReverse = key.reverse ?? globalReverse;
 
-      const result = compareValues(valA, valB, useNumeric, useIgnoreCase);
+      const result = compareValues(valA, valB, opts);
 
       if (result !== 0) {
         return useReverse ? -result : result;
       }
     }
 
-    // All keys equal, compare whole lines as tiebreaker
-    // Apply global reverse to tiebreaker as well
-    const tiebreaker = a.localeCompare(b);
-    return globalReverse ? -tiebreaker : tiebreaker;
+    // All keys equal, compare whole lines as tiebreaker unless stable
+    if (!globalStable) {
+      const tiebreaker = a.localeCompare(b);
+      return globalReverse ? -tiebreaker : tiebreaker;
+    }
+    return 0;
   };
 }
 

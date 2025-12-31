@@ -10,9 +10,17 @@ const sortHelp = {
   summary: "sort lines of text files",
   usage: "sort [OPTION]... [FILE]...",
   options: [
+    "-b, --ignore-leading-blanks  ignore leading blanks",
+    "-d, --dictionary-order  consider only blanks and alphanumeric characters",
     "-f, --ignore-case    fold lower case to upper case characters",
+    "-h, --human-numeric-sort  compare human readable numbers (e.g., 2K 1G)",
+    "-M, --month-sort     compare (unknown) < 'JAN' < ... < 'DEC'",
     "-n, --numeric-sort   compare according to string numerical value",
     "-r, --reverse        reverse the result of comparisons",
+    "-V, --version-sort   natural sort of (version) numbers within text",
+    "-c, --check          check for sorted input; do not sort",
+    "-o, --output=FILE    write result to FILE instead of stdout",
+    "-s, --stable         stabilize sort by disabling last-resort comparison",
     "-u, --unique         output only unique lines",
     "-k, --key=KEYDEF     sort via a key; KEYDEF gives location and type",
     "-t, --field-separator=SEP  use SEP as field separator",
@@ -21,7 +29,7 @@ const sortHelp = {
   description: `KEYDEF is F[.C][OPTS][,F[.C][OPTS]]
   F is a field number (1-indexed)
   C is a character position within the field (1-indexed)
-  OPTS can be: n (numeric), r (reverse), f (fold case), b (ignore blanks)
+  OPTS can be: b d f h M n r V (per-key modifiers)
 
 Examples:
   -k1        sort by first field
@@ -43,6 +51,14 @@ export const sortCommand: Command = {
       numeric: false,
       unique: false,
       ignoreCase: false,
+      humanNumeric: false,
+      versionSort: false,
+      dictionaryOrder: false,
+      monthSort: false,
+      ignoreLeadingBlanks: false,
+      stable: false,
+      checkOnly: false,
+      outputFile: null,
       keys: [],
       fieldDelimiter: null,
     };
@@ -59,6 +75,26 @@ export const sortCommand: Command = {
         options.unique = true;
       } else if (arg === "-f" || arg === "--ignore-case") {
         options.ignoreCase = true;
+      } else if (arg === "-h" || arg === "--human-numeric-sort") {
+        options.humanNumeric = true;
+      } else if (arg === "-V" || arg === "--version-sort") {
+        options.versionSort = true;
+      } else if (arg === "-d" || arg === "--dictionary-order") {
+        options.dictionaryOrder = true;
+      } else if (arg === "-M" || arg === "--month-sort") {
+        options.monthSort = true;
+      } else if (arg === "-b" || arg === "--ignore-leading-blanks") {
+        options.ignoreLeadingBlanks = true;
+      } else if (arg === "-s" || arg === "--stable") {
+        options.stable = true;
+      } else if (arg === "-c" || arg === "--check") {
+        options.checkOnly = true;
+      } else if (arg === "-o" || arg === "--output") {
+        options.outputFile = args[++i] || null;
+      } else if (arg.startsWith("-o")) {
+        options.outputFile = arg.slice(2) || null;
+      } else if (arg.startsWith("--output=")) {
+        options.outputFile = arg.slice(9) || null;
       } else if (arg === "-t" || arg === "--field-separator") {
         options.fieldDelimiter = args[++i] || null;
       } else if (arg.startsWith("-t")) {
@@ -93,6 +129,13 @@ export const sortCommand: Command = {
           else if (char === "n") options.numeric = true;
           else if (char === "u") options.unique = true;
           else if (char === "f") options.ignoreCase = true;
+          else if (char === "h") options.humanNumeric = true;
+          else if (char === "V") options.versionSort = true;
+          else if (char === "d") options.dictionaryOrder = true;
+          else if (char === "M") options.monthSort = true;
+          else if (char === "b") options.ignoreLeadingBlanks = true;
+          else if (char === "s") options.stable = true;
+          else if (char === "c") options.checkOnly = true;
           else {
             hasUnknown = true;
             break;
@@ -119,8 +162,25 @@ export const sortCommand: Command = {
       lines.pop();
     }
 
-    // Sort lines using the comparator
+    // Create comparator
     const comparator = createComparator(options);
+
+    // Check mode: verify if already sorted
+    if (options.checkOnly) {
+      const checkFile = files.length > 0 ? files[0] : "-";
+      for (let i = 1; i < lines.length; i++) {
+        if (comparator(lines[i - 1], lines[i]) > 0) {
+          return {
+            stdout: "",
+            stderr: `sort: ${checkFile}:${i + 1}: disorder: ${lines[i]}\n`,
+            exitCode: 1,
+          };
+        }
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+
+    // Sort lines using the comparator
     lines.sort(comparator);
 
     // Remove duplicates if -u
@@ -129,6 +189,14 @@ export const sortCommand: Command = {
     }
 
     const output = lines.length > 0 ? `${lines.join("\n")}\n` : "";
+
+    // Output to file if -o specified
+    if (options.outputFile) {
+      const outPath = ctx.fs.resolvePath(ctx.cwd, options.outputFile);
+      await ctx.fs.writeFile(outPath, output);
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+
     return { stdout: output, stderr: "", exitCode: 0 };
   },
 };

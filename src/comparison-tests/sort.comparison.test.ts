@@ -153,4 +153,61 @@ describe("sort command - Real Bash Comparison", () => {
       await compareOutputs(env, testDir, "sort -ru test.txt");
     });
   });
+
+  describe("-h flag (human numeric)", () => {
+    it("should sort human readable sizes", async () => {
+      const env = await setupFiles(testDir, {
+        "test.txt": "1K\n2M\n500\n1G\n100K\n",
+      });
+      await compareOutputs(env, testDir, "sort -h test.txt");
+    });
+
+    it("should sort human sizes in reverse", async () => {
+      const env = await setupFiles(testDir, {
+        "test.txt": "1K\n1M\n1G\n",
+      });
+      await compareOutputs(env, testDir, "sort -hr test.txt");
+    });
+  });
+
+  describe("-V flag (version)", () => {
+    it("should sort version numbers", async () => {
+      const env = await setupFiles(testDir, {
+        "test.txt": "file1.10\nfile1.2\nfile1.1\n",
+      });
+      await compareOutputs(env, testDir, "sort -V test.txt");
+    });
+
+    it("should sort semver-like versions", async () => {
+      const env = await setupFiles(testDir, {
+        "test.txt": "1.0.10\n1.0.2\n1.0.0\n",
+      });
+      await compareOutputs(env, testDir, "sort -V test.txt");
+    });
+  });
+
+  describe("-c flag (check)", () => {
+    it("should return 0 for sorted input", async () => {
+      const env = await setupFiles(testDir, {
+        "test.txt": "a\nb\nc\n",
+      });
+      await compareOutputs(env, testDir, "sort -c test.txt; echo $?");
+    });
+
+    it("should return 1 for unsorted input", async () => {
+      const env = await setupFiles(testDir, {
+        "test.txt": "b\na\nc\n",
+      });
+      await compareOutputs(env, testDir, "sort -c test.txt 2>&1; echo $?");
+    });
+  });
+
+  describe("-b flag (ignore leading blanks)", () => {
+    it("should ignore leading blanks", async () => {
+      const env = await setupFiles(testDir, {
+        "test.txt": "  b\na\n   c\n",
+      });
+      await compareOutputs(env, testDir, "sort -b test.txt");
+    });
+  });
 });

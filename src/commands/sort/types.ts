@@ -14,6 +14,10 @@ export interface KeySpec {
   reverse?: boolean; // r - reverse sort
   ignoreCase?: boolean; // f - fold case
   ignoreLeading?: boolean; // b - ignore leading blanks
+  humanNumeric?: boolean; // h - human numeric sort
+  versionSort?: boolean; // V - version sort
+  dictionaryOrder?: boolean; // d - dictionary order
+  monthSort?: boolean; // M - month sort
 }
 
 export interface SortOptions {
@@ -21,6 +25,14 @@ export interface SortOptions {
   numeric: boolean;
   unique: boolean;
   ignoreCase: boolean;
+  humanNumeric: boolean;
+  versionSort: boolean;
+  dictionaryOrder: boolean;
+  monthSort: boolean;
+  ignoreLeadingBlanks: boolean;
+  stable: boolean;
+  checkOnly: boolean;
+  outputFile: string | null;
   keys: KeySpec[];
   fieldDelimiter: string | null;
 }
