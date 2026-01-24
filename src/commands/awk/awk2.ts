@@ -55,7 +55,7 @@ export const awkCommand2: Command = {
         const eqIdx = assignment.indexOf("=");
         if (eqIdx > 0) {
           const varName = assignment.slice(0, eqIdx);
-          const varValue = assignment.slice(eqIdx + 1);
+          const varValue = processEscapes(assignment.slice(eqIdx + 1));
           vars[varName] = varValue;
         }
         programIdx = i + 1;
@@ -113,6 +113,11 @@ export const awkCommand2: Command = {
       maxIterations: ctx.limits?.maxAwkIterations,
       fs: awkFs,
       cwd: ctx.cwd,
+      // Wrap ctx.exec to match the expected signature for command pipe getline
+      exec: ctx.exec
+        ? // biome-ignore lint/style/noNonNullAssertion: exec checked in ternary
+          (cmd: string) => ctx.exec!(cmd, { cwd: ctx.cwd })
+        : undefined,
     });
     runtimeCtx.FS = fieldSepStr;
     runtimeCtx.vars = { ...vars };
@@ -125,14 +130,37 @@ export const awkCommand2: Command = {
       runtimeCtx.ARGV[String(i + 1)] = files[i];
     }
 
+    // Set up ENVIRON from shell environment
+    runtimeCtx.ENVIRON = { ...ctx.env };
+
     // Create interpreter
     const interp = new AwkInterpreter(runtimeCtx);
     interp.execute(ast);
+
+    // Check if there are main rules (non-BEGIN/END patterns)
+    const hasMainRules = ast.rules.some(
+      (rule) => rule.pattern?.type !== "begin" && rule.pattern?.type !== "end",
+    );
+    // Check if there are END blocks (need to read files to populate NR)
+    const hasEndBlocks = ast.rules.some((rule) => rule.pattern?.type === "end");
 
     // Execute BEGIN blocks
     try {
       await interp.executeBegin();
       if (runtimeCtx.shouldExit) {
+        // exit in BEGIN still runs END blocks (AWK semantics)
+        await interp.executeEnd();
+        return {
+          stdout: interp.getOutput(),
+          stderr: "",
+          exitCode: interp.getExitCode(),
+        };
+      }
+
+      // Only skip file reading if there are no main rules AND no END blocks
+      // END blocks need NR to be populated from reading files
+      if (!hasMainRules && !hasEndBlocks) {
+        // Just run END blocks (none), no input processing needed
         return {
           stdout: interp.getOutput(),
           stderr: "",
@@ -191,10 +219,8 @@ export const awkCommand2: Command = {
         if (runtimeCtx.shouldExit) break;
       }
 
-      // Execute END blocks
-      if (!runtimeCtx.shouldExit) {
-        await interp.executeEnd();
-      }
+      // Execute END blocks (always run, even after exit - AWK semantics)
+      await interp.executeEnd();
 
       return {
         stdout: interp.getOutput(),
@@ -220,6 +246,10 @@ function processEscapes(str: string): string {
     .replace(/\\t/g, "\t")
     .replace(/\\n/g, "\n")
     .replace(/\\r/g, "\r")
+    .replace(/\\b/g, "\b")
+    .replace(/\\f/g, "\f")
+    .replace(/\\a/g, "\x07") // bell
+    .replace(/\\v/g, "\v")
     .replace(/\\\\/g, "\\");
 }
 

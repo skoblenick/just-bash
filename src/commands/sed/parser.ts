@@ -53,7 +53,22 @@ class SedParser {
 
   private parseCommand(): { command: SedCommand | null; error?: string } {
     // Parse optional address range
-    const address = this.parseAddressRange();
+    const addressResult = this.parseAddressRange();
+
+    // Check for incomplete range error (e.g., "1,")
+    if (addressResult?.error) {
+      return { command: null, error: addressResult.error };
+    }
+
+    const address = addressResult?.address;
+
+    // Check for negation modifier (!)
+    if (this.check(SedTokenType.NEGATION)) {
+      this.advance();
+      if (address) {
+        address.negated = true;
+      }
+    }
 
     // Skip whitespace tokens
     while (
@@ -64,12 +79,12 @@ class SedParser {
     }
 
     if (this.isAtEnd()) {
-      // Address with no command - treat as print
+      // Address with no command is an error (standard sed behavior)
       if (
         address &&
         (address.start !== undefined || address.end !== undefined)
       ) {
-        return { command: { type: "print", address } };
+        return { command: null, error: "command expected" };
       }
       return { command: null };
     }
@@ -160,6 +175,16 @@ class SedParser {
           command: { type: "execute", address, command: token.command },
         };
 
+      case SedTokenType.VERSION:
+        this.advance();
+        return {
+          command: {
+            type: "version",
+            address,
+            minVersion: token.label, // label field holds version string
+          },
+        };
+
       case SedTokenType.LBRACE:
         return this.parseGroup(address);
 
@@ -171,12 +196,12 @@ class SedParser {
         return { command: null, error: `invalid command: ${token.value}` };
 
       default:
-        // If we have an address but no recognized command, treat as print
+        // Address with no recognized command is an error
         if (
           address &&
           (address.start !== undefined || address.end !== undefined)
         ) {
-          return { command: { type: "print", address } };
+          return { command: null, error: "command expected" };
         }
         return { command: null };
     }
@@ -224,8 +249,7 @@ class SedParser {
         return { command: { type: "list", address } };
       case "F":
         return { command: { type: "printFilename", address } };
-      case "v":
-        return { command: { type: "version", address } };
+      // Note: 'v' command is now handled as SedTokenType.VERSION
       default:
         return { command: null, error: `unknown command: ${cmd}` };
     }
@@ -341,21 +365,32 @@ class SedParser {
     };
   }
 
-  private parseAddressRange(): AddressRange | undefined {
+  private parseAddressRange():
+    | { address: AddressRange; error?: undefined }
+    | { address?: undefined; error: string }
+    | undefined {
     // Try to parse first address
     const start = this.parseAddress();
     if (start === undefined) {
       return undefined;
     }
 
-    // Check for range separator
+    // Check for range separator or relative offset (GNU extension: ,+N)
     let end: SedAddress | undefined;
-    if (this.check(SedTokenType.COMMA)) {
+    if (this.check(SedTokenType.RELATIVE_OFFSET)) {
+      // GNU extension: /pattern/,+N means "match N more lines after pattern"
+      const token = this.advance();
+      end = { offset: token.offset || 0 };
+    } else if (this.check(SedTokenType.COMMA)) {
       this.advance();
       end = this.parseAddress();
+      // If we consumed a comma but have no end address, that's an error
+      if (end === undefined) {
+        return { error: "expected context address" };
+      }
     }
 
-    return { start, end };
+    return { address: { start, end } };
   }
 
   private parseAddress(): SedAddress | undefined {
@@ -380,6 +415,10 @@ class SedParser {
           first: token.first || 0,
           step: token.step || 0,
         };
+
+      case SedTokenType.RELATIVE_OFFSET:
+        this.advance();
+        return { offset: token.offset || 0 };
 
       default:
         return undefined;
@@ -416,6 +455,13 @@ class SedParser {
 /**
  * Parse multiple sed scripts into a list of commands.
  * This is the main entry point for parsing sed scripts.
+ *
+ * Also detects #n or #r special comments at the start of the first script:
+ * - #n enables silent mode (equivalent to -n flag)
+ * - #r enables extended regex mode (equivalent to -r/-E flag)
+ *
+ * Handles backslash continuation across -e arguments:
+ * - If a script ends with \, the next script is treated as continuation
  */
 export function parseMultipleScripts(
   scripts: string[],
@@ -423,7 +469,125 @@ export function parseMultipleScripts(
 ): {
   commands: SedCommand[];
   error?: string;
+  silentMode?: boolean;
+  extendedRegexMode?: boolean;
 } {
-  const parser = new SedParser(scripts, extendedRegex);
-  return parser.parse();
+  // Check for #n or #r special comments at the start of the first script
+  let silentMode = false;
+  let extendedRegexFromComment = false;
+
+  // First, join scripts that have backslash continuation
+  // e.g., -e 'a\' -e 'text' becomes 'a\ntext'
+  const joinedScripts: string[] = [];
+  for (let i = 0; i < scripts.length; i++) {
+    let script = scripts[i];
+
+    // Handle #n/#r comments in first script
+    if (joinedScripts.length === 0 && i === 0) {
+      const match = script.match(/^#([nr]+)\s*(?:\n|$)/i);
+      if (match) {
+        const flags = match[1].toLowerCase();
+        if (flags.includes("n")) {
+          silentMode = true;
+        }
+        if (flags.includes("r")) {
+          extendedRegexFromComment = true;
+        }
+        script = script.slice(match[0].length);
+      }
+    }
+
+    // Check if last script ends with backslash (continuation)
+    // For a/i/c commands, the backslash indicates text continues on next line
+    // Keep the backslash so the lexer knows to read the text from the next line
+    if (
+      joinedScripts.length > 0 &&
+      joinedScripts[joinedScripts.length - 1].endsWith("\\")
+    ) {
+      // Keep trailing backslash and join with newline
+      const lastScript = joinedScripts[joinedScripts.length - 1];
+      joinedScripts[joinedScripts.length - 1] = `${lastScript}\n${script}`;
+    } else {
+      joinedScripts.push(script);
+    }
+  }
+
+  // Join all scripts with newlines to form a single script
+  // This is necessary for grouped commands { } where { and } may be in different -e arguments
+  const combinedScript = joinedScripts.join("\n");
+
+  const parser = new SedParser(
+    [combinedScript],
+    extendedRegex || extendedRegexFromComment,
+  );
+  const result = parser.parse();
+
+  // Validate that all branch targets exist
+  if (!result.error && result.commands.length > 0) {
+    const labelError = validateLabels(result.commands);
+    if (labelError) {
+      return {
+        commands: [],
+        error: labelError,
+        silentMode,
+        extendedRegexMode: extendedRegexFromComment,
+      };
+    }
+  }
+
+  return {
+    ...result,
+    silentMode,
+    extendedRegexMode: extendedRegexFromComment,
+  };
+}
+
+/**
+ * Validate that all branch targets reference existing labels.
+ * Returns an error message if validation fails, undefined otherwise.
+ */
+function validateLabels(commands: SedCommand[]): string | undefined {
+  // Collect all defined labels
+  const definedLabels = new Set<string>();
+  collectLabels(commands, definedLabels);
+
+  // Check all branch commands
+  const undefinedLabel = findUndefinedLabel(commands, definedLabels);
+  if (undefinedLabel) {
+    return `undefined label '${undefinedLabel}'`;
+  }
+
+  return undefined;
+}
+
+function collectLabels(commands: SedCommand[], labels: Set<string>): void {
+  for (const cmd of commands) {
+    if (cmd.type === "label") {
+      labels.add(cmd.name);
+    } else if (cmd.type === "group") {
+      collectLabels(cmd.commands, labels);
+    }
+  }
+}
+
+function findUndefinedLabel(
+  commands: SedCommand[],
+  definedLabels: Set<string>,
+): string | undefined {
+  for (const cmd of commands) {
+    if (
+      (cmd.type === "branch" ||
+        cmd.type === "branchOnSubst" ||
+        cmd.type === "branchOnNoSubst") &&
+      cmd.label &&
+      !definedLabels.has(cmd.label)
+    ) {
+      return cmd.label;
+    }
+    if (cmd.type === "group") {
+      const result = findUndefinedLabel(cmd.commands, definedLabels);
+      if (result) return result;
+    }
+  }
+  return undefined;
 }

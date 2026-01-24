@@ -16,6 +16,7 @@ export interface AwkRuntimeContext {
   FS: string;
   OFS: string;
   ORS: string;
+  OFMT: string;
   NR: number;
   NF: number;
   FNR: number;
@@ -31,10 +32,15 @@ export interface AwkRuntimeContext {
   // User variables and arrays
   vars: Record<string, AwkValue>;
   arrays: Record<string, Record<string, AwkValue>>;
+  // Array aliases for function parameter passing (parameter name → original name)
+  arrayAliases: Map<string, string>;
 
   // ARGC/ARGV for command line arguments
   ARGC: number;
   ARGV: Record<string, string>;
+
+  // ENVIRON for environment variables
+  ENVIRON: Record<string, string>;
 
   // User-defined functions (from AST)
   functions: Map<string, AwkFunctionDef>;
@@ -58,6 +64,7 @@ export interface AwkRuntimeContext {
   loopContinue: boolean;
   returnValue?: AwkValue;
   hasReturn: boolean;
+  inEndBlock: boolean; // Track if we're executing END blocks (for exit behavior)
 
   // Output buffer (stdout)
   output: string;
@@ -71,6 +78,11 @@ export interface AwkRuntimeContext {
 
   // Random function override for testing
   random?: () => number;
+
+  // Exec function for command pipe getline ("cmd" | getline)
+  exec?: (
+    cmd: string,
+  ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
 }
 
 export interface CreateContextOptions {
@@ -79,6 +91,9 @@ export interface CreateContextOptions {
   maxRecursionDepth?: number;
   fs?: AwkFileSystem;
   cwd?: string;
+  exec?: (
+    cmd: string,
+  ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
 }
 
 export function createRuntimeContext(
@@ -90,12 +105,14 @@ export function createRuntimeContext(
     maxRecursionDepth = DEFAULT_MAX_RECURSION_DEPTH,
     fs,
     cwd,
+    exec,
   } = options;
 
   return {
     FS: " ",
     OFS: " ",
     ORS: "\n",
+    OFMT: "%.6g",
     NR: 0,
     NF: 0,
     FNR: 0,
@@ -109,9 +126,11 @@ export function createRuntimeContext(
 
     vars: {},
     arrays: {},
+    arrayAliases: new Map(),
 
     ARGC: 0,
     ARGV: {},
+    ENVIRON: {},
 
     functions: new Map(),
 
@@ -127,11 +146,13 @@ export function createRuntimeContext(
     loopBreak: false,
     loopContinue: false,
     hasReturn: false,
+    inEndBlock: false,
 
     output: "",
     openedFiles: new Set(),
 
     fs,
     cwd,
+    exec,
   };
 }

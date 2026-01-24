@@ -124,6 +124,7 @@ async function executeStmt(
 
 /**
  * Execute print statement with optional file redirection.
+ * Numbers are formatted using OFMT (default "%.6g").
  */
 async function executePrint(
   ctx: AwkRuntimeContext,
@@ -132,7 +133,20 @@ async function executePrint(
 ): Promise<void> {
   const values: string[] = [];
   for (const arg of args) {
-    values.push(toAwkString(await evalExpr(ctx, arg)));
+    const val = await evalExpr(ctx, arg);
+    // Use OFMT for numeric values (POSIX AWK behavior)
+    // Exception: integers are printed directly without OFMT formatting
+    // This matches real AWK behavior where `print 2292437248` outputs
+    // the full integer, not scientific notation
+    if (typeof val === "number") {
+      if (Number.isInteger(val) && Math.abs(val) < Number.MAX_SAFE_INTEGER) {
+        values.push(String(val));
+      } else {
+        values.push(formatPrintf(ctx.OFMT, [val]));
+      }
+    } else {
+      values.push(toAwkString(val));
+    }
   }
   const text = values.join(ctx.OFS) + ctx.ORS;
 
@@ -157,6 +171,7 @@ async function executePrintf(
   for (const arg of args) {
     values.push(await evalExpr(ctx, arg));
   }
+  // DEBUG: console.log("printf DEBUG:", JSON.stringify({formatStr, values}));
   const text = formatPrintf(formatStr, values);
 
   if (output) {

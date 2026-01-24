@@ -40,8 +40,9 @@ export async function runSedTestCase(
     "/tmp/_keep": "",
   };
 
-  // Add input file if specified
-  if (testCase.infile) {
+  // Add input file if specified (even if empty, for tests that reference it)
+  // Also create the file if the command references "input" (for empty file tests)
+  if (testCase.infile || testCase.command.includes("input")) {
     files["/tmp/input"] = testCase.infile;
   }
 
@@ -77,7 +78,12 @@ export async function runSedTestCase(
     const actualOutput = result.stdout;
     const expectedOutput = testCase.expectedOutput;
 
-    const passed = actualOutput === expectedOutput;
+    // Handle special "???" marker meaning "expect error"
+    // Test passes if there's an error (non-empty stderr or non-zero exit code)
+    const expectError = expectedOutput === "???";
+    const passed = expectError
+      ? result.stderr !== "" || result.exitCode !== 0
+      : actualOutput === expectedOutput;
 
     // Handle skip tests
     if (expectedToFail) {

@@ -107,7 +107,7 @@ export async function evalExpr(
       return evalInExpr(ctx, expr.key, expr.array);
 
     case "getline":
-      return evalGetline(ctx, expr.variable, expr.file);
+      return evalGetline(ctx, expr.variable, expr.file, expr.command);
 
     case "tuple":
       return evalTuple(ctx, expr.elements);
@@ -304,11 +304,25 @@ async function callUserFunction(
     savedParams[param] = ctx.vars[param];
   }
 
+  // Track array aliases we create (to clean up later)
+  const createdAliases: string[] = [];
+
   // Set up parameters
   for (let i = 0; i < func.params.length; i++) {
     const param = func.params[i];
-    const value = i < args.length ? await evalExpr(ctx, args[i]) : "";
-    ctx.vars[param] = value;
+    if (i < args.length) {
+      const arg = args[i];
+      // If argument is a simple variable, set up an array alias
+      // This allows arrays to be passed by reference
+      if (arg.type === "variable") {
+        ctx.arrayAliases.set(param, arg.name);
+        createdAliases.push(param);
+      }
+      const value = await evalExpr(ctx, arg);
+      ctx.vars[param] = value;
+    } else {
+      ctx.vars[param] = "";
+    }
   }
 
   // Execute function body
@@ -328,6 +342,11 @@ async function callUserFunction(
     } else {
       delete ctx.vars[param];
     }
+  }
+
+  // Clean up array aliases we created
+  for (const alias of createdAliases) {
+    ctx.arrayAliases.delete(alias);
   }
 
   ctx.hasReturn = false;
@@ -515,13 +534,19 @@ async function evalInExpr(
 }
 
 /**
- * Evaluate getline - reads next line from current input or from file.
+ * Evaluate getline - reads next line from current input, file, or command pipe.
  */
 async function evalGetline(
   ctx: AwkRuntimeContext,
   variable?: string,
   file?: AwkExpr,
+  command?: AwkExpr,
 ): Promise<AwkValue> {
+  // "cmd" | getline - read from command pipe
+  if (command) {
+    return evalGetlineFromCommand(ctx, variable, command);
+  }
+
   // getline < "file" - read from external file
   if (file) {
     return evalGetlineFromFile(ctx, variable, file);
@@ -552,6 +577,71 @@ async function evalGetline(
 }
 
 /**
+ * Read a line from a command pipe: "cmd" | getline [var]
+ * The command is executed and its output is read line by line.
+ */
+async function evalGetlineFromCommand(
+  ctx: AwkRuntimeContext,
+  variable: string | undefined,
+  cmdExpr: AwkExpr,
+): Promise<AwkValue> {
+  if (!ctx.exec) {
+    return -1; // No exec function available
+  }
+
+  const cmd = toAwkString(await evalExpr(ctx, cmdExpr));
+
+  // Use a cache for command output, similar to file caching
+  const cacheKey = `__cmd_${cmd}`;
+  const indexKey = `__cmdi_${cmd}`;
+
+  let lines: string[];
+  let lineIndex: number;
+
+  if (ctx.vars[cacheKey] === undefined) {
+    // First time running this command
+    try {
+      const result = await ctx.exec(cmd);
+      const output = result.stdout;
+      lines = output.split("\n");
+      // Remove trailing empty line if output ends with newline
+      if (lines.length > 0 && lines[lines.length - 1] === "") {
+        lines.pop();
+      }
+      // Store in cache
+      ctx.vars[cacheKey] = JSON.stringify(lines);
+      ctx.vars[indexKey] = -1;
+      lineIndex = -1;
+    } catch {
+      return -1; // Error running command
+    }
+  } else {
+    // Command already cached
+    lines = JSON.parse(ctx.vars[cacheKey] as string);
+    lineIndex = ctx.vars[indexKey] as number;
+  }
+
+  // Get next line
+  const nextIndex = lineIndex + 1;
+  if (nextIndex >= lines.length) {
+    return 0; // EOF
+  }
+
+  const line = lines[nextIndex];
+  ctx.vars[indexKey] = nextIndex;
+
+  if (variable) {
+    setVariable(ctx, variable, line);
+  } else {
+    setCurrentLine(ctx, line);
+  }
+
+  // Note: command pipe getline does NOT update NR
+
+  return 1;
+}
+
+/**
  * Read a line from an external file.
  */
 async function evalGetlineFromFile(
@@ -564,6 +654,12 @@ async function evalGetlineFromFile(
   }
 
   const filename = toAwkString(await evalExpr(ctx, fileExpr));
+
+  // Special handling for /dev/null - always returns EOF immediately
+  if (filename === "/dev/null") {
+    return 0;
+  }
+
   const filePath = ctx.fs.resolvePath(ctx.cwd, filename);
 
   // Use a special internal structure to track file state

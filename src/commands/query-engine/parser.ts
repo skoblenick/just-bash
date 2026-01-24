@@ -61,6 +61,9 @@ export type TokenType =
   | "NULL"
   | "REDUCE"
   | "FOREACH"
+  | "LABEL"
+  | "BREAK"
+  | "DEF"
   | "DOTDOT"
   | "EOF";
 
@@ -92,6 +95,9 @@ const KEYWORDS: Record<string, TokenType> = {
   null: "NULL",
   reduce: "REDUCE",
   foreach: "FOREACH",
+  label: "LABEL",
+  break: "BREAK",
+  def: "DEF",
 };
 
 function tokenize(input: string): Token[] {
@@ -246,15 +252,7 @@ function tokenize(input: string): Token[] {
       continue;
     }
     if (c === "-") {
-      // Could be negative number or minus operator
-      if (isDigit(peek())) {
-        let num = c;
-        while (!isEof() && (isDigit(peek()) || peek() === ".")) {
-          num += advance();
-        }
-        tokens.push({ type: "NUMBER", value: Number(num), pos: start });
-        continue;
-      }
+      // Always tokenize as MINUS - let parser handle unary minus
       tokens.push({ type: "MINUS", pos: start });
       continue;
     }
@@ -389,7 +387,10 @@ export type AstNode =
   | StringInterpNode
   | UpdateOpNode
   | ReduceNode
-  | ForeachNode;
+  | ForeachNode
+  | LabelNode
+  | BreakNode
+  | DefNode;
 
 export interface IdentityNode {
   type: "Identity";
@@ -503,7 +504,22 @@ export interface VarBindNode {
   name: string;
   value: AstNode;
   body: AstNode;
+  pattern?: DestructurePattern;
+  alternatives?: DestructurePattern[]; // For ?// alternative patterns
 }
+
+// Destructuring pattern for variable binding
+export type DestructurePattern =
+  | { type: "var"; name: string }
+  | { type: "array"; elements: DestructurePattern[] }
+  | {
+      type: "object";
+      fields: {
+        key: string | AstNode;
+        pattern: DestructurePattern;
+        keyVar?: string;
+      }[];
+    };
 
 export interface VarRefNode {
   type: "VarRef";
@@ -535,6 +551,7 @@ export interface ReduceNode {
   type: "Reduce";
   expr: AstNode;
   varName: string;
+  pattern?: DestructurePattern;
   init: AstNode;
   update: AstNode;
 }
@@ -543,12 +560,33 @@ export interface ForeachNode {
   type: "Foreach";
   expr: AstNode;
   varName: string;
+  pattern?: DestructurePattern;
   init: AstNode;
   update: AstNode;
   extract?: AstNode;
 }
 
 // ============================================================================
+
+export interface LabelNode {
+  type: "Label";
+  name: string;
+  body: AstNode;
+}
+
+export interface BreakNode {
+  type: "Break";
+  name: string;
+}
+
+export interface DefNode {
+  type: "Def";
+  name: string;
+  params: string[];
+  funcBody: AstNode;
+  body: AstNode;
+}
+
 // Parser
 // ============================================================================
 
@@ -604,6 +642,101 @@ class Parser {
     return this.parsePipe();
   }
 
+  /**
+   * Parse a destructuring pattern for variable binding
+   * Patterns can be:
+   *   $var              - simple variable
+   *   [$a, $b, ...]     - array destructuring
+   *   {key: $a, ...}    - object destructuring
+   *   {$a, ...}         - shorthand object destructuring (key same as var name)
+   */
+  private parsePattern(): DestructurePattern {
+    // Array pattern: [$a, $b, ...]
+    if (this.match("LBRACKET")) {
+      const elements: DestructurePattern[] = [];
+      if (!this.check("RBRACKET")) {
+        elements.push(this.parsePattern());
+        while (this.match("COMMA")) {
+          if (this.check("RBRACKET")) break;
+          elements.push(this.parsePattern());
+        }
+      }
+      this.expect("RBRACKET", "Expected ']' after array pattern");
+      return { type: "array", elements };
+    }
+
+    // Object pattern: {key: $a, $b, ...}
+    if (this.match("LBRACE")) {
+      const fields: { key: string | AstNode; pattern: DestructurePattern }[] =
+        [];
+      if (!this.check("RBRACE")) {
+        // Parse first field
+        fields.push(this.parsePatternField());
+        while (this.match("COMMA")) {
+          if (this.check("RBRACE")) break;
+          fields.push(this.parsePatternField());
+        }
+      }
+      this.expect("RBRACE", "Expected '}' after object pattern");
+      return { type: "object", fields };
+    }
+
+    // Simple variable: $name
+    const tok = this.expect("IDENT", "Expected variable name in pattern");
+    const name = tok.value as string;
+    if (!name.startsWith("$")) {
+      throw new Error(`Variable name must start with $ at position ${tok.pos}`);
+    }
+    return { type: "var", name };
+  }
+
+  /**
+   * Parse a single field in an object destructuring pattern
+   */
+  private parsePatternField(): {
+    key: string | AstNode;
+    pattern: DestructurePattern;
+    keyVar?: string;
+  } {
+    // Check for computed key: (expr): $pattern
+    if (this.match("LPAREN")) {
+      const keyExpr = this.parseExpr();
+      this.expect("RPAREN", "Expected ')' after computed key");
+      this.expect("COLON", "Expected ':' after computed key");
+      const pattern = this.parsePattern();
+      return { key: keyExpr, pattern };
+    }
+
+    // Check for shorthand: $name or $name:pattern
+    const tok = this.peek();
+    if (tok.type === "IDENT") {
+      const name = tok.value as string;
+      if (name.startsWith("$")) {
+        this.advance();
+        // Check for $name:pattern (e.g., $b:[$c, $d] means key="b", pattern=[$c,$d], keyVar=$b)
+        if (this.match("COLON")) {
+          const pattern = this.parsePattern();
+          // Also bind $name to the whole value at this key
+          return { key: name.slice(1), pattern, keyVar: name };
+        }
+        // Shorthand: $foo is equivalent to foo: $foo
+        return { key: name.slice(1), pattern: { type: "var", name } };
+      }
+      // Regular key: name
+      this.advance();
+      if (this.match("COLON")) {
+        const pattern = this.parsePattern();
+        return { key: name, pattern };
+      }
+      // If no colon, it's a shorthand for key: $key
+      return { key: name, pattern: { type: "var", name: `$${name}` } };
+    }
+
+    throw new Error(
+      `Expected field name in object pattern at position ${tok.pos}`,
+    );
+  }
+
   private parsePipe(): AstNode {
     let left = this.parseComma();
     while (this.match("PIPE")) {
@@ -625,21 +758,46 @@ class Parser {
   private parseVarBind(): AstNode {
     const expr = this.parseUpdate();
     if (this.match("AS")) {
-      const varToken = this.expect(
-        "IDENT",
-        "Expected variable name after 'as'",
-      );
-      const varName = varToken.value as string;
-      if (!varName.startsWith("$")) {
-        throw new Error(
-          `Variable name must start with $ at position ${varToken.pos}`,
-        );
+      // Parse pattern (can be $var, [$a, $b], {key: $a}, etc.)
+      const pattern = this.parsePattern();
+
+      // Check for alternative patterns: ?// PATTERN ?// PATTERN ...
+      const alternatives: DestructurePattern[] = [];
+      while (this.check("QUESTION") && this.peekAhead(1)?.type === "ALT") {
+        this.advance(); // consume QUESTION
+        this.advance(); // consume ALT
+        alternatives.push(this.parsePattern());
       }
+
       this.expect("PIPE", "Expected '|' after variable binding");
       const body = this.parseExpr();
-      return { type: "VarBind", name: varName, value: expr, body };
+
+      // For simple variable patterns without alternatives
+      if (pattern.type === "var" && alternatives.length === 0) {
+        return { type: "VarBind", name: pattern.name, value: expr, body };
+      }
+
+      // For complex patterns or patterns with alternatives
+      return {
+        type: "VarBind",
+        name: pattern.type === "var" ? pattern.name : "",
+        value: expr,
+        body,
+        pattern: pattern.type !== "var" ? pattern : undefined,
+        alternatives: alternatives.length > 0 ? alternatives : undefined,
+      };
     }
     return expr;
+  }
+
+  /**
+   * Peek at a token N positions ahead (0 = current, 1 = next, etc.)
+   */
+  private peekAhead(
+    n: number,
+  ): { type: TokenType; pos: number; value?: unknown } | undefined {
+    const idx = this.pos + n;
+    return idx < this.tokens.length ? this.tokens[idx] : undefined;
   }
 
   private parseUpdate(): AstNode {
@@ -769,10 +927,13 @@ class Parser {
     while (true) {
       if (this.match("QUESTION")) {
         expr = { type: "Optional", expr };
-      } else if (this.check("DOT") && this.peek(1).type === "IDENT") {
+      } else if (
+        this.check("DOT") &&
+        (this.peek(1).type === "IDENT" || this.peek(1).type === "STRING")
+      ) {
         this.advance(); // consume DOT
-        const name = this.expect("IDENT", "Expected field name")
-          .value as string;
+        const token = this.advance();
+        const name = token.value as string;
         expr = { type: "Field", name, base: expr };
       } else if (this.check("LBRACKET")) {
         this.advance();
@@ -831,8 +992,8 @@ class Parser {
         this.expect("RBRACKET", "Expected ']'");
         return { type: "Index", index: indexExpr };
       }
-      // .field
-      if (this.check("IDENT")) {
+      // .field or ."quoted-field"
+      if (this.check("IDENT") || this.check("STRING")) {
         const name = this.advance().value as string;
         return { type: "Field", name };
       }
@@ -903,34 +1064,33 @@ class Parser {
 
     // reduce EXPR as $VAR (INIT; UPDATE)
     if (this.match("REDUCE")) {
-      const expr = this.parsePostfix();
+      // Use parseAddSub to handle expressions like .[] / .[] or .[] + .[] before 'as'
+      const expr = this.parseAddSub();
       this.expect("AS", "Expected 'as' after reduce expression");
-      const varToken = this.expect("IDENT", "Expected variable name");
-      const varName = varToken.value as string;
-      if (!varName.startsWith("$")) {
-        throw new Error(
-          `Variable name must start with $ at position ${varToken.pos}`,
-        );
-      }
+      const pattern = this.parsePattern();
       this.expect("LPAREN", "Expected '(' after variable");
       const init = this.parseExpr();
       this.expect("SEMICOLON", "Expected ';' after init expression");
       const update = this.parseExpr();
       this.expect("RPAREN", "Expected ')' after update expression");
-      return { type: "Reduce", expr, varName, init, update };
+      // For simple variable, use varName; for complex patterns, use pattern
+      const varName = pattern.type === "var" ? pattern.name : "";
+      return {
+        type: "Reduce",
+        expr,
+        varName,
+        init,
+        update,
+        pattern: pattern.type !== "var" ? pattern : undefined,
+      };
     }
 
     // foreach EXPR as $VAR (INIT; UPDATE) or (INIT; UPDATE; EXTRACT)
     if (this.match("FOREACH")) {
-      const expr = this.parsePostfix();
+      // Use parseAddSub to handle expressions like .[] / .[] or .[] + .[] before 'as'
+      const expr = this.parseAddSub();
       this.expect("AS", "Expected 'as' after foreach expression");
-      const varToken = this.expect("IDENT", "Expected variable name");
-      const varName = varToken.value as string;
-      if (!varName.startsWith("$")) {
-        throw new Error(
-          `Variable name must start with $ at position ${varToken.pos}`,
-        );
-      }
+      const pattern = this.parsePattern();
       this.expect("LPAREN", "Expected '(' after variable");
       const init = this.parseExpr();
       this.expect("SEMICOLON", "Expected ';' after init expression");
@@ -940,10 +1100,85 @@ class Parser {
         extract = this.parseExpr();
       }
       this.expect("RPAREN", "Expected ')' after expressions");
-      return { type: "Foreach", expr, varName, init, update, extract };
+      // For simple variable, use varName; for complex patterns, use pattern
+      const varName = pattern.type === "var" ? pattern.name : "";
+      return {
+        type: "Foreach",
+        expr,
+        varName,
+        init,
+        update,
+        extract,
+        pattern: pattern.type !== "var" ? pattern : undefined,
+      };
     }
 
     // not as a standalone filter (when used as a function, not unary operator)
+
+    // label $NAME | BODY
+    if (this.match("LABEL")) {
+      const labelToken = this.expect(
+        "IDENT",
+        "Expected label name (e.g., $out)",
+      );
+      const labelName = labelToken.value as string;
+      if (!labelName.startsWith("$")) {
+        throw new Error(
+          `Label name must start with $ at position ${labelToken.pos}`,
+        );
+      }
+      this.expect("PIPE", "Expected '|' after label name");
+      const labelBody = this.parseExpr();
+      return { type: "Label", name: labelName, body: labelBody };
+    }
+
+    // break $NAME
+    if (this.match("BREAK")) {
+      const breakToken = this.expect(
+        "IDENT",
+        "Expected label name to break to",
+      );
+      const breakLabel = breakToken.value as string;
+      if (!breakLabel.startsWith("$")) {
+        throw new Error(
+          `Break label must start with $ at position ${breakToken.pos}`,
+        );
+      }
+      return { type: "Break", name: breakLabel };
+    }
+
+    // def NAME: BODY; or def NAME(ARGS): BODY;
+    if (this.match("DEF")) {
+      const nameToken = this.expect(
+        "IDENT",
+        "Expected function name after def",
+      );
+      const funcName = nameToken.value as string;
+      const params: string[] = [];
+
+      // Check for parameters
+      if (this.match("LPAREN")) {
+        if (!this.check("RPAREN")) {
+          // Parse first parameter
+          const firstParam = this.expect("IDENT", "Expected parameter name");
+          params.push(firstParam.value as string);
+          // Parse remaining parameters (semicolon-separated)
+          while (this.match("SEMICOLON")) {
+            const param = this.expect("IDENT", "Expected parameter name");
+            params.push(param.value as string);
+          }
+        }
+        this.expect("RPAREN", "Expected ')' after parameters");
+      }
+
+      this.expect("COLON", "Expected ':' after function name");
+      const funcBody = this.parseExpr();
+      this.expect("SEMICOLON", "Expected ';' after function body");
+      const body = this.parseExpr();
+
+      return { type: "Def", name: funcName, params, funcBody, body };
+    }
+
     if (this.match("NOT")) {
       return { type: "Call", name: "not", args: [] };
     }
