@@ -176,8 +176,12 @@ echo status=$?
 ## N-I dash stdout: status=127
 
 #### Source with arguments
-## SKIP: Test data directory not available
-. $REPO_ROOT/spec/testdata/show-argv.sh foo bar  # dash doesn't have source
+# Create test script inline - echoes "show-argv:" followed by args
+cat > /tmp/show-argv.sh <<'SCRIPT'
+echo "show-argv: $*"
+SCRIPT
+
+. /tmp/show-argv.sh foo bar  # dash doesn't have source
 ## STDOUT:
 show-argv: foo bar
 ## END
@@ -186,10 +190,15 @@ show-argv:
 ## END
 
 #### Source from a function, mutating argv and defining a local var
-## SKIP: Glob after $@ expansion not implemented
+# Create source-argv.sh inline - shift mutates caller's argv when no args given
+cat > /tmp/source-argv.sh <<'SCRIPT'
+echo "source-argv: $*"
+shift
+local foo=foo_val
+SCRIPT
 f() {
-  . $REPO_ROOT/spec/testdata/source-argv.sh              # no argv
-  . $REPO_ROOT/spec/testdata/source-argv.sh args to src  # new argv
+  . /tmp/source-argv.sh              # no argv
+  . /tmp/source-argv.sh args to src  # new argv
   echo $@
   echo foo=$foo  # defined in source-argv.sh
 }

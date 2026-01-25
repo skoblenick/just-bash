@@ -71,7 +71,7 @@ yes
 ## END
 
 #### $HOME is NOT set
-## SKIP: Interactive shell invocation not implemented
+## SKIP (unimplementable): Interactive shell invocation not implemented
 case $SH in *zsh) echo 'zsh sets HOME'; exit ;; esac
 
 home=$(echo $HOME)
@@ -95,7 +95,7 @@ zsh sets HOME
 ## END
 
 #### Vars set interactively only: $HISTFILE
-## SKIP: Shell invocation not supported
+## SKIP (unimplementable): Shell invocation not supported
 case $SH in dash|mksh|zsh) exit ;; esac
 
 $SH --norc --rcfile /dev/null -c 'echo histfile=${HISTFILE:+yes}'
@@ -110,7 +110,7 @@ histfile=yes
 ## END
 
 #### Some vars are set, even without startup file, or env: PATH, PWD
-## SKIP: /usr/bin/env not implemented
+## SKIP (unimplementable): bash --noprofile --norc flags require shell invocation
 
 flags=''
 case $SH in
@@ -181,7 +181,6 @@ ifs 0
 ## END
 
 #### UID EUID PPID can't be changed
-## SKIP: Interactive shell invocation not implemented
 
 # bash makes these 3 read-only
 {
@@ -211,7 +210,6 @@ status=0
 ## END
 
 #### HOSTNAME OSTYPE can be changed
-## SKIP: Interactive shell invocation not implemented
 case $SH in zsh) exit ;; esac
 
 #$SH -c 'echo hostname=$HOSTNAME'
@@ -308,7 +306,6 @@ command sub OK
 ## END
 
 #### $BASHPID DOES change with subshell and command sub
-## SKIP: errexit in compound commands/pipelines not implemented
 set -o errexit
 die() {
   echo 1>&2 "$@"; exit 1
@@ -392,7 +389,6 @@ status=1
 ## END
 
 #### $HOSTNAME
-## SKIP: $HOSTNAME special variable not implemented
 test "$HOSTNAME" = "$(hostname)"
 echo status=$?
 ## STDOUT:
@@ -433,7 +429,6 @@ f
 ## END
 
 #### $LINENO in "bare" redirect arg (bug regression)
-## SKIP: $LINENO tracking in complex contexts not implemented
 filename=$TMP/bare3
 rm -f $filename
 > $TMP/bare$LINENO
@@ -458,7 +453,6 @@ written
 ## END
 
 #### $LINENO in [[
-## SKIP: $LINENO in conditional/arithmetic context not implemented
 echo one
 [[ $LINENO -eq 2 ]] && echo OK
 ## STDOUT:
@@ -471,7 +465,6 @@ OK
 ## N-I mksh stdout: one
 
 #### $LINENO in ((
-## SKIP: LINENO in arithmetic context not implemented
 echo one
 (( x = LINENO ))
 echo $x
@@ -514,9 +507,6 @@ done
 ## END
 
 #### $LINENO in for (( loop
-## SKIP: $LINENO tracking in complex contexts not implemented
-# This is a real edge case that I'm not sure we care about.  We would have to
-# change the span ID inside the loop to make it really correct.
 echo one
 for (( i = 0; i < $LINENO; i++ )); do
   echo $i
@@ -599,7 +589,6 @@ spaces
 ## N-I dash/mksh stdout-json: ""
 
 #### $_ with pipeline and subshell
-## SKIP: $_ with pipeline/subshell has different behavior
 case $SH in dash|mksh) exit ;; esac
 
 shopt -s lastpipe
@@ -672,7 +661,6 @@ simple
 
 
 #### $_ with assignments, arrays, etc.
-## SKIP: $_ with declare/colon builtin not implemented
 case $SH in dash|mksh) exit ;; esac
 
 : foo
@@ -756,7 +744,7 @@ prev=prev=prev=
 
 
 #### $_ is not undefined on first use
-## SKIP: $_ in subshell invocation not implemented
+## SKIP (unimplementable): $_ in subshell invocation not implemented
 set -e
 
 x=$($SH -u -c 'echo prev=$_')

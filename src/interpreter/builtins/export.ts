@@ -5,12 +5,15 @@
  *   export              - List all exported variables
  *   export -p           - List all exported variables (same as no args)
  *   export NAME=value   - Set and export variable
+ *   export NAME+=value  - Append value and export variable
  *   export NAME         - Export existing variable (or create empty)
  *   export -n NAME      - Un-export variable (remove from env)
  */
 
 import type { ExecResult } from "../../types.js";
+import { markExported, unmarkExported } from "../helpers/readonly.js";
 import { OK, result, success } from "../helpers/result.js";
+import { expandTildesInValue } from "../helpers/tilde.js";
 import type { InterpreterContext } from "../types.js";
 
 export function handleExport(
@@ -34,24 +37,39 @@ export function handleExport(
   // No args or just -p: list all exported variables
   if (processedArgs.length === 0 && !unexport) {
     let stdout = "";
-    const entries = Object.entries(ctx.state.env)
-      .filter(([key]) => !key.startsWith("BASH_ALIAS_")) // Don't list aliases
-      .sort(([a], [b]) => a.localeCompare(b));
+    // Only list variables that are actually exported
+    const exportedVars = ctx.state.exportedVars ?? new Set();
+    const sortedNames = Array.from(exportedVars).sort();
 
-    for (const [name, value] of entries) {
-      // Quote the value, escaping any quotes inside
-      const escapedValue = value.replace(/'/g, "'\\''");
-      stdout += `declare -x ${name}='${escapedValue}'\n`;
+    for (const name of sortedNames) {
+      const value = ctx.state.env[name];
+      if (value !== undefined) {
+        // Quote the value with double quotes, escaping backslashes and double quotes
+        const escapedValue = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+        stdout += `declare -x ${name}="${escapedValue}"\n`;
+      }
     }
     return success(stdout);
   }
 
-  // Handle un-export
+  // Handle un-export: remove export attribute but keep variable value
+  // In bash, `export -n name=value` sets the value AND removes export attribute
   if (unexport) {
     for (const arg of processedArgs) {
-      // Just remove the = part if present, we only care about the name
-      const name = arg.split("=")[0];
-      delete ctx.state.env[name];
+      let name: string;
+      let value: string | undefined;
+
+      if (arg.includes("=")) {
+        const eqIdx = arg.indexOf("=");
+        name = arg.slice(0, eqIdx);
+        value = expandTildesInValue(ctx, arg.slice(eqIdx + 1));
+        // Set the value
+        ctx.state.env[name] = value;
+      } else {
+        name = arg;
+      }
+      // Remove export attribute without deleting the variable
+      unmarkExported(ctx, name);
     }
     return OK;
   }
@@ -63,12 +81,19 @@ export function handleExport(
   for (const arg of processedArgs) {
     let name: string;
     let value: string | undefined;
+    let isAppend = false;
 
-    if (arg.includes("=")) {
+    // Check for += append syntax: export NAME+=value
+    const appendMatch = arg.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\+=(.*)$/);
+    if (appendMatch) {
+      name = appendMatch[1];
+      value = expandTildesInValue(ctx, appendMatch[2]);
+      isAppend = true;
+    } else if (arg.includes("=")) {
       // export NAME=value
       const eqIdx = arg.indexOf("=");
       name = arg.slice(0, eqIdx);
-      value = arg.slice(eqIdx + 1);
+      value = expandTildesInValue(ctx, arg.slice(eqIdx + 1));
     } else {
       // export NAME (without value)
       name = arg;
@@ -82,14 +107,21 @@ export function handleExport(
     }
 
     if (value !== undefined) {
-      ctx.state.env[name] = value;
+      if (isAppend) {
+        // Append to existing value (or set if not defined)
+        const existing = ctx.state.env[name] ?? "";
+        ctx.state.env[name] = existing + value;
+      } else {
+        ctx.state.env[name] = value;
+      }
     } else {
       // If variable doesn't exist, create it as empty
       if (!(name in ctx.state.env)) {
         ctx.state.env[name] = "";
       }
-      // If it exists, it's already "exported" in our model
     }
+    // Mark the variable as exported
+    markExported(ctx, name);
   }
 
   return result("", stderr, exitCode);

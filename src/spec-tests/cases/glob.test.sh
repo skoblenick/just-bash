@@ -15,8 +15,8 @@ echo \*.sh
 ## stdout: *.sh
 
 #### 1 char glob
-## SKIP: Test data directory not available
-cd $REPO_ROOT
+mkdir -p /tmp/testdir/bin
+cd /tmp/testdir
 echo [b]in
 ## stdout: bin
 
@@ -35,7 +35,7 @@ echo [!bin
 ## stdout: [!bin
 
 #### glob can expand to command and arg
-## SKIP: Test data directory not available
+## SKIP (unimplementable): Test requires Oils test infrastructure
 cd $REPO_ROOT
 spec/testdata/echo.s[hz]
 ## stdout: spec/testdata/echo.sz
@@ -90,7 +90,6 @@ echo "${g[@]}"
 ## N-I dash/ash status: 2
 
 #### glob with escaped - in char class
-## SKIP: Glob char class with escaped dash not implemented
 touch _tmp/foo.-
 touch _tmp/c.C
 echo _tmp/*.[C-D] _tmp/*.[C\-D]
@@ -110,7 +109,6 @@ echo _tmp/\"*.py\"
 ## stdout: _tmp/"quoted.py"
 
 #### glob escaped
-## SKIP: Glob with escaped special characters not implemented
 # - mksh doesn't support [[:punct:]] ?
 # - python shell fails because \[ not supported!
 touch _tmp/\[abc\] _tmp/\?
@@ -153,7 +151,6 @@ echo -* hello zzzz?
 ## stdout-json: "hello zzzzz"
 
 #### set -o noglob
-## SKIP: Test requires real filesystem and $REPO_ROOT
 cd $REPO_ROOT
 touch _tmp/spec-tmp/a.zz _tmp/spec-tmp/b.zz
 echo _tmp/spec-tmp/*.zz
@@ -173,7 +170,6 @@ echo $var
 ## END
 
 #### Splitting/Globbing doesn't happen on local assignment
-## SKIP: Test data directory not available
 cd $REPO_ROOT
 
 f() {
@@ -188,7 +184,6 @@ f 'void *'
 ## BUG dash status: 2
 
 #### Glob of unescaped [[] and []]
-## SKIP: Glob with escaped special characters not implemented
 touch $TMP/[ $TMP/]
 cd $TMP
 echo [\[z] [\]z]  # the right way to do it
@@ -265,7 +260,7 @@ __a__
 # note: zsh also passes this, but it doesn't run with this file.
 
 #### Glob ordering respects LC_COLLATE (zsh respects this too)
-## SKIP: Interactive shell invocation not implemented
+## SKIP (unimplementable): Interactive shell invocation not implemented
 
 # test/spec-common.sh sets LC_ALL=C.UTF_8
 unset LC_ALL
@@ -299,7 +294,6 @@ hello hello-test.sh hello.py hello_preamble.sh
 
 
 #### \ in unquoted substitutions does not match a backslash
-## SKIP: Glob with escaped special characters not implemented
 mkdir x
 touch \
   x/test.ifs.\\.txt \
@@ -369,7 +363,6 @@ argv.py x/unmatching.$v
 
 
 #### \ in unquoted substitutions escapes globchars
-## SKIP: Glob with escaped special characters not implemented
 mkdir x
 touch \
   'x/test.ifs.\.txt' \
@@ -407,7 +400,6 @@ hi . ..
 ## END
 
 #### shopt -u globskipdots shows . and ..
-## SKIP: globskipdots shopt not implemented
 case $SH in dash|ash|mksh) exit ;; esac
 
 shopt -u globskipdots

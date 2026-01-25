@@ -109,7 +109,6 @@ vals: ['3 5 7']
 ## END
 
 #### append to element (BashArray)
-hello=100
 a=([hello]=1 [hello]+=2)
 printf 'keys: '; argv.py "${!a[@]}"
 printf 'vals: '; argv.py "${a[@]}"
@@ -117,9 +116,9 @@ a+=([hello]+=:34 [hello]+=:56)
 printf 'keys: '; argv.py "${!a[@]}"
 printf 'vals: '; argv.py "${a[@]}"
 ## STDOUT:
-keys: ['100']
+keys: ['0']
 vals: ['12']
-keys: ['100']
+keys: ['0']
 vals: ['12:34:56']
 ## END
 
@@ -152,17 +151,13 @@ a=([j]=1 2 3 4)
 echo "status=$?"
 printf 'keys: '; argv.py "${!a[@]}"
 printf 'vals: '; argv.py "${a[@]}"
-## status: 1
+## status: 0
 ## STDOUT:
-## END
-# Bash outputs warning messages and succeeds (exit status 0)
-## BUG bash status: 0
-## BUG bash STDOUT:
 status=0
 keys: ['j']
 vals: ['1']
 ## END
-## BUG bash STDERR:
+## STDERR:
 bash: line 2: a: 2: must use subscript when assigning associative array
 bash: line 2: a: 3: must use subscript when assigning associative array
 bash: line 2: a: 4: must use subscript when assigning associative array

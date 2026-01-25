@@ -80,7 +80,6 @@ directory/leaf.md
 ## END
 
 #### in zsh, ***/ follows symlinked directories, while **/ does not
-## SKIP: Symbolic links (ln -s) not implemented
 case $SH in bash) exit ;; esac
 
 mkdir directory-1

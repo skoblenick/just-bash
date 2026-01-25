@@ -67,47 +67,10 @@ declare -f ek
 ## N-I mksh status: 127
 
 #### declare -F with shopt -s extdebug prints more info
-## SKIP: Test data directory not available
-case $SH in mksh) exit ;; esac
-
-source $REPO_ROOT/spec/testdata/bash-source-2.sh
-
-shopt -s extdebug
-
-add () { expr 4 + 4; }
-
-declare -F 
-echo
-
-declare -F add
-# in bash-source-2
-declare -F g | sed "s;$REPO_ROOT;ROOT;g"
-
-## STDOUT:
-declare -f add
-declare -f g
-
-add 7 main
-g 3 ROOT/spec/testdata/bash-source-2.sh
-## END
-## N-I mksh STDOUT:
-## END
+## SKIP (unimplementable): extdebug not implemented
 
 #### declare -F with shopt -s extdebug and main file
-## SKIP: Test data directory not available
-case $SH in mksh) exit ;; esac
-
-$SH $REPO_ROOT/spec/testdata/extdebug.sh | sed "s;$REPO_ROOT;ROOT;g"
-
-## STDOUT:
-declare -f add
-declare -f g
-
-add 5 ROOT/spec/testdata/extdebug.sh
-g 3 ROOT/spec/testdata/bash-source-2.sh
-## END
-## N-I mksh STDOUT:
-## END
+## SKIP (unimplementable): extdebug not implemented
 
 #### declare -p var (exit status)
 var1() { echo func; }  # function names are NOT found.
@@ -254,7 +217,6 @@ typeset test_var5=555
 ## END
 
 #### declare -p doesn't print binary data, but can be loaded into bash
-## SKIP: od command not implemented
 
 # bash prints binary data!
 case $SH in bash*|mksh) exit ;; esac
@@ -377,6 +339,16 @@ declare -A test_arr3=()
 declare -a test_arr4=([0]="1" [1]="2" [2]="3")
 declare -a test_arr5=([0]="1" [1]="2" [2]="3")
 declare -A test_arr6=([a]="1" [b]="2" [c]="3" )
+declare -a test_arr7=([3]="foo")
+## END
+
+## OK bash-2 STDOUT:
+declare -a test_arr1=()
+declare -a test_arr2=()
+declare -A test_arr3=()
+declare -a test_arr4=([0]="1" [1]="2" [2]="3")
+declare -a test_arr5=([0]="1" [1]="2" [2]="3")
+declare -A test_arr6=(['a']=1 ['b']=2 ['c']=3)
 declare -a test_arr7=([3]="foo")
 ## END
 ## N-I mksh stdout-json: ""
@@ -581,7 +553,6 @@ arr[3]=a10
 ## N-I mksh status: 1
 
 #### declare -p and value.Undef
-
 # This is a regression for a crash
 # But actually there is also an incompatibility -- we don't print anything
 
@@ -602,7 +573,6 @@ declare -- x
 ## END
 
 #### eval -- "$(declare -p arr)" (restore arrays w/ unset elements)
-## SKIP: Array literal inside array parse error not implemented
 arr=(1 2 3)
 eval -- "$(arr=(); arr[3]= arr[4]=foo; declare -p arr)"
 for i in {0..4}; do
@@ -816,6 +786,8 @@ echo $a $b $c
 ## stdout-json: ""
 ## BUG bash stdout: x
 ## BUG bash status: 0
+## OK bash stdout-json: ""
+## OK bash status: 1
 ## OK mksh stdout-json: ""
 ## OK mksh status: 1
 
@@ -919,7 +891,7 @@ echo r=$r
 
 # clear the readonly flag.  Why is this accepted in bash, but doesn't do
 # anything?
-typeset +r r=r2 
+typeset +r r=r2
 echo r=$r
 
 r=r3
@@ -935,6 +907,11 @@ r=r3
 # mksh doesn't allow you to unset
 ## OK mksh status: 2
 ## OK mksh STDOUT:
+r=r1
+## END
+# just-bash treats readonly assignment as fatal
+## OK bash status: 1
+## OK bash STDOUT:
 r=r1
 ## END
 

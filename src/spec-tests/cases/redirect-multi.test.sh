@@ -37,7 +37,6 @@ zz-*-xx
 ## END
 
 #### ysh behavior when glob doesn't match
-## SKIP: Oils-specific shopt options not implemented
 
 shopt -s ysh:upgrade
 
@@ -164,7 +163,6 @@ hi
 ## END
 
 #### File redirect with extended glob
-## SKIP: extglob not implemented
 
 shopt -s extglob
 
@@ -193,7 +191,6 @@ status=0
 ## END
 
 #### Extended glob that doesn't match anything
-## SKIP: extglob not implemented
 shopt -s extglob
 rm bad_*
 
@@ -231,7 +228,6 @@ status=0
 
 
 #### Non-file redirects don't respect glob args (we differe from bash)
-## SKIP: Advanced file descriptor redirections not implemented
 
 touch 10
 
@@ -291,7 +287,6 @@ status=0
 
 
 #### File redirects have word splitting too!
-
 file='foo bar'
 
 echo hi > $file

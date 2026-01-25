@@ -242,7 +242,6 @@ status=1
 ## END
 
 #### -x
-## SKIP: File permission testing with chmod not fully implemented
 rm -f $TMP/x
 echo 'echo hi' > $TMP/x
 test -x $TMP/x || echo 'no'
@@ -256,7 +255,6 @@ bad
 ## END
 
 #### -r
-## SKIP: File permission testing with chmod not fully implemented
 echo '1' > $TMP/testr_yes
 echo '2' > $TMP/testr_no
 chmod -r $TMP/testr_no  # remove read permission
@@ -268,7 +266,6 @@ no
 ## END
 
 #### -w
-## SKIP: File permission testing with chmod not fully implemented
 rm -f $TMP/testw_*
 echo '1' > $TMP/testw_yes
 echo '2' > $TMP/testw_no
@@ -332,7 +329,6 @@ echo status=$?
 ## BUG bash stdout: status=1
 
 #### -ot and -nt
-## SKIP: File time/inode comparison (-ot, -nt, -ef) not implemented
 touch -d 2017/12/31 $TMP/x
 touch -d 2018/01/01 > $TMP/y
 test $TMP/x -ot $TMP/y && echo 'older'
@@ -409,7 +405,7 @@ status=1
 
 
 #### test -p named pipe
-## SKIP: Named pipes not implemented
+## SKIP (unimplementable): Named pipes (mkfifo) not implemented - virtual filesystem limitation
 mkfifo $TMP/fifo
 test -p $TMP/fifo
 echo status=$?
@@ -444,7 +440,6 @@ status=1
 ## END
 
 #### -u for setuid, -g too
-## SKIP: setuid/setgid file permission bits not implemented
 touch $TMP/setuid $TMP/setgid
 chmod u+s $TMP/setuid
 chmod g+s $TMP/setgid
@@ -537,7 +532,7 @@ status=2
 ## status: 1
 
 #### -ef
-## SKIP: File time/inode comparison (-ot, -nt, -ef) not implemented
+## SKIP (unimplementable): -ef with hardlinks requires inode tracking - virtual filesystem limitation
 left=$TMP/left
 right=$TMP/right
 touch $left $right

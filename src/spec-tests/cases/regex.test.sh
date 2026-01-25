@@ -114,7 +114,6 @@ true
 ## END
 
 #### Regex with == and not =~ is parse error, different lexer mode required
-## SKIP: Parse error detection edge cases not implemented
 # They both give a syntax error.  This is lame.
 [[ '^(a b)$' == ^(a\ b)$ ]] && echo true
 ## status: 2
@@ -139,7 +138,6 @@ true
 ## N-I zsh status: 1
 
 #### Regex to match literal brackets []
-
 # bash-completion relies on this, so we're making it match bash.
 # zsh understandably differs.
 [[ '[]' =~ \[\] ]] && echo true
@@ -186,7 +184,6 @@ false
 ## BUG zsh status: 1
 
 #### Unquoted { is a regex parse error
-## SKIP: Parse error detection edge cases not implemented
 [[ { =~ { ]] && echo true
 echo status=$?
 ## stdout-json: ""
@@ -318,7 +315,6 @@ status=1
 ## END
 
 #### pattern $f(x)  -- regression
-## SKIP: [[ ]] runtime and env prefix edge cases not implemented
 f=fff
 [[ fffx =~ $f(x) ]]
 echo status=$?
@@ -329,7 +325,7 @@ status=0
 status=1
 ## END
 
-#### pattern a=(1) 
+#### pattern a=(1)
 [[ a=x =~ a=(x) ]]
 echo status=$?
 [[ =x =~ a=(x) ]]
@@ -398,7 +394,6 @@ three
 ## END
 
 #### Multiple adjacent () groups
-
 if [[ 'a-b-c-d' =~ a-(b|  >>)-c-( ;|[de])|ff|gg ]]; then
   argv.py "${BASH_REMATCH[@]}"
 fi
@@ -434,7 +429,6 @@ fi
 ## END
 
 #### unquoted [a  b] as pattern, [a  b|c]
-## SKIP: Here-doc edge cases not implemented
 
 $SH <<'EOF'
 [[ a =~ [ab] ]] && echo yes
@@ -479,8 +473,6 @@ one
 ## N-I zsh status: 1
 
 #### Operator chars ; & but not |
-## SKIP: Here-doc edge cases not implemented
-
 # Hm semicolon is still an operator in bash
 $SH <<'EOF'
 [[ ';' =~ ; ]] && echo semi
@@ -553,7 +545,6 @@ newline=1
 
 
 #### Quotes '' "" $'' $"" in pattern
-## SKIP: Here-doc edge cases not implemented
 
 $SH <<'EOF'
 [[ '|' =~ '|' ]] && echo sq
@@ -588,7 +579,6 @@ dollar-dq=0
 
 
 #### Unicode in pattern
-## SKIP: Here-doc edge cases not implemented
 
 $SH <<'EOF'
 [[ μ =~ μ ]] && echo mu
@@ -601,7 +591,6 @@ mu=0
 ## END
 
 #### Parse error with 2 words
-## SKIP: Parse error detection edge cases not implemented
 
 if [[ a =~ c a ]]; then
   echo one

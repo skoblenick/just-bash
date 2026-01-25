@@ -10,7 +10,6 @@
 
 
 #### declare -i -l -u errors can be silenced - ignore_flags_not_impl
-
 declare -i foo=2+3
 echo status=$?
 echo foo=$foo
@@ -67,7 +66,6 @@ echo [$j]
 ## END
 
 #### declare -i with arithmetic inside strings (Nix, issue 864)
-
 # example
 # https://github.com/NixOS/nixpkgs/blob/master/pkgs/stdenv/generic/setup.sh#L379
 

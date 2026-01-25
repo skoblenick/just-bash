@@ -161,7 +161,7 @@ s1+='d'
 echo $s1 $s2
 ## stdout: abcd abc
 
-#### typeset s+= 
+#### typeset s+=
 
 typeset s+=foo
 echo s=$s
@@ -183,7 +183,7 @@ t=foofoo
 ## N-I zsh status: 1
 ## N-I zsh stdout-json: ""
 
-#### typeset s${dyn}+= 
+#### typeset s${dyn}+=
 
 dyn=x
 

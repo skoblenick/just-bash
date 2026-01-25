@@ -58,7 +58,6 @@ OK
 ## N-I dash status: 1
 
 #### printf -v a[1]
-## SKIP: printf -v with array subscript not implemented
 a=(a b c)
 printf -v 'a[1]' %s 'foo'
 echo status=$?
@@ -94,7 +93,6 @@ argv.py "$foo"
 ## END
 
 #### dynamic declare instead of %q
-## SKIP: Dynamic declare not implemented
 var=foo
 val='"quoted" with spaces and \'
 # I think this is bash 4.4 only.
@@ -360,7 +358,7 @@ printf '[%X]\n' \'ab # extra chars ignored
 ## END
 
 #### unsigned / octal / hex big
-## SKIP: 64-bit shift overflow not implemented
+## SKIP (unimplementable): 64-bit shift overflow not implemented
 
 for big in $(( 1 << 32 )) $(( (1 << 63) - 1 )); do
   printf '[%u]\n' $big
@@ -501,7 +499,7 @@ weird bug
 ## END
 
 #### Invalid UTF-8
-## SKIP: python2 not available
+## SKIP (unimplementable): python2 not available
 
 echo bytes1
 not_utf8=$(python2 -c 'print("\xce\xce")')
@@ -559,7 +557,7 @@ e0
 
 
 #### Too large
-## SKIP: python2 not available
+## SKIP (unimplementable): python2 not available
 case $SH in mksh) echo 'weird bug'; exit ;; esac
 
 echo too large
@@ -601,7 +599,7 @@ f4
 
 
 #### negative numbers with unsigned / octal / hex
-## SKIP: 64-bit printf unsigned/octal/hex not implemented
+## SKIP (unimplementable): 64-bit printf unsigned/octal/hex not implemented
 printf '[%u]\n' -42
 echo status=$?
 
@@ -698,7 +696,6 @@ printf '[%G]\n' 3.14
 ## N-I osh status: 2
 
 #### printf backslash escapes
-## SKIP: argv.py test helper not available
 argv.py "$(printf 'a\tb')"
 argv.py "$(printf '\xE2\x98\xA0')"
 argv.py "$(printf '\044e')"
@@ -717,7 +714,6 @@ argv.py "$(printf '\0377')"  # out of range
 ## END
 
 #### printf octal backslash escapes
-## SKIP: argv.py test helper not available
 argv.py "$(printf '\0377')"
 argv.py "$(printf '\377')"
 ## STDOUT:
@@ -726,7 +722,6 @@ argv.py "$(printf '\377')"
 ## END
 
 #### printf unicode backslash escapes
-## SKIP: argv.py test helper not available
 argv.py "$(printf '\u2620')"
 argv.py "$(printf '\U0000065f')"
 ## STDOUT:
@@ -763,7 +758,6 @@ AZ
 ## END
 
 #### printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8
-## SKIP: od command not implemented
 
 # TODO: in YSH, this should be deprecated
 case $SH in dash|ash) exit ;; esac
@@ -974,7 +968,6 @@ status=1
 ## END
 
 #### %(strftime format)T
-## SKIP: Printf strftime format (%(...)T) not implemented
 # The result depends on timezone
 export TZ=Asia/Tokyo
 printf '%(%Y-%m-%d)T\n' 1557978599
@@ -994,7 +987,7 @@ status=2
 ## END
 
 #### %(strftime format)T doesn't respect TZ if not exported
-## SKIP: Printf strftime format (%(...)T) not implemented
+## SKIP (unimplementable): TZ export semantics differ - our interpreter runs in same process so TZ affects libc regardless
 
 # note: this test leaks!  It assumes that /etc/localtime is NOT Portugal.
 
@@ -1017,7 +1010,6 @@ not equal
 ## N-I mksh/zsh/ash/dash stdout-json: ""
 
 #### %(strftime format)T TZ in environ but not in shell's memory
-## SKIP: Printf strftime format (%(...)T) not implemented
 
 # note: this test leaks!  It assumes that /etc/localtime is NOT Portugal.
 
@@ -1039,7 +1031,6 @@ not equal
 ## N-I mksh/zsh/ash/dash stdout-json: ""
 
 #### %10.5(strftime format)T
-## SKIP: Printf strftime format (%(...)T) not implemented
 # The result depends on timezone
 export TZ=Asia/Tokyo
 printf '[%10.5(%Y-%m-%d)T]\n' 1557978599
@@ -1066,7 +1057,7 @@ xz
 ## END
 
 #### bash truncates long strftime string at 128
-## SKIP: strftime not implemented
+## SKIP (unimplementable): Bash-specific 128-byte strftime buffer truncation - implementation detail
 
 case $SH in ash|dash|mksh|zsh) exit ;; esac
 
@@ -1124,7 +1115,7 @@ esac
 ## END
 
 #### printf positive integer overflow
-## SKIP: 64-bit integer edge cases not implemented
+## SKIP (unimplementable): 64-bit integer edge cases not implemented
 
 # %i seems like a synonym for %d
 
@@ -1206,7 +1197,7 @@ status=0
 ## END
 
 #### printf negative integer overflow
-## SKIP: 64-bit integer edge cases not implemented
+## SKIP (unimplementable): 64-bit integer edge cases not implemented
 
 # %i seems like a synonym for %d
 
@@ -1386,7 +1377,6 @@ a9
 ## END
 
 #### printf %b with truncated octal escapes
-## SKIP: od command not implemented
 
 # 8 is not a valid octal digit
 

@@ -22,11 +22,23 @@
 
 export { handleBreak } from "./break.js";
 export { handleCd } from "./cd.js";
+export { handleCompgen } from "./compgen.js";
+export { handleComplete } from "./complete.js";
+export { handleCompopt } from "./compopt.js";
 export { handleContinue } from "./continue.js";
-export { handleDeclare, handleReadonly } from "./declare.js";
+export {
+  applyCaseTransform,
+  handleDeclare,
+  handleReadonly,
+  isInteger,
+} from "./declare.js";
+export { handleDirs, handlePopd, handlePushd } from "./dirs.js";
 export { handleEval } from "./eval.js";
 export { handleExit } from "./exit.js";
 export { handleExport } from "./export.js";
+export { handleGetopts } from "./getopts.js";
+export { handleHash } from "./hash.js";
+export { handleHelp } from "./help.js";
 export { handleLet } from "./let.js";
 export { handleLocal } from "./local.js";
 export { handleMapfile } from "./mapfile.js";
@@ -36,3 +48,4 @@ export { handleSet } from "./set.js";
 export { handleShift } from "./shift.js";
 export { handleSource } from "./source.js";
 export { handleUnset } from "./unset.js";
+export { getLocalVarDepth } from "./variable-helpers.js";

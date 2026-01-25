@@ -191,6 +191,7 @@ test "$old" = "$new" && echo "not changed"
 ## stdout: not changed
 
 #### can't export array (strict_array)
+## SKIP (unimplementable): shopt strict_array not implemented (OSH-specific, not standard bash)
 shopt -s strict_array
 
 typeset -a a
@@ -210,6 +211,7 @@ None
 ## OK osh stdout-json: ""
 
 #### can't export associative array (strict_array)
+## SKIP (unimplementable): shopt strict_array not implemented (OSH-specific, not standard bash)
 shopt -s strict_array
 
 typeset -A a
@@ -230,6 +232,7 @@ None
 readonly foo=bar
 foo=eggs
 echo "status=$?"  # nothing happens
+## stdout-json: ""
 ## status: 1
 ## BUG bash stdout: status=1
 ## BUG bash status: 0
@@ -255,6 +258,11 @@ global
 local
 ## END
 ## OK dash status: 2
+# just-bash treats readonly assignment as fatal (matches dash)
+## OK bash STDOUT:
+local
+## END
+## OK bash status: 1
 
 # mksh aborts the function, weird
 ## OK mksh STDOUT:
@@ -401,10 +409,10 @@ x=
 unset %
 echo status=$?
 ## STDOUT:
-status=2
-## END
-## OK bash/mksh STDOUT:
 status=1
+## END
+## OK osh STDOUT:
+status=2
 ## END
 ## BUG zsh STDOUT:
 status=0
@@ -577,7 +585,6 @@ status=0
 
 
 #### Unset array member with dynamic parsing
-
 i=1
 a=(w x y z)
 unset 'a[ i - 1 ]' a[i+1]  # note: can't have space between a and [
@@ -620,7 +627,7 @@ f
 ## BUG zsh status: 0
 
 #### local after readonly
-f() { 
+f() {
   readonly y
   local x=1 y=$(( x ))
   echo y=$y
@@ -645,7 +652,6 @@ y=
 ## END
 
 #### unset a[-1] (bf.bash regression)
-## SKIP: Right brace in parameter default value not implemented
 case $SH in dash|zsh) exit ;; esac
 
 a=(1 2 3)
@@ -675,7 +681,6 @@ last=0
 
 
 #### unset a[-1] in sparse array (bf.bash regression)
-## SKIP: Right brace in parameter default value not implemented
 case $SH in dash|zsh) exit ;; esac
 
 a=(0 1 2 3 4)

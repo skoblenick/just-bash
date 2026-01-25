@@ -118,6 +118,7 @@ for ((i = $"3"; i < $"5"; ++i)); do echo $i; done
 
 
 #### Integers near 31, 32, 62 bits
+## SKIP (unimplementable): 64-bit integers not supported
 
 # Hm this was never a bug, but it's worth testing.
 # The bug was EvalToInt() in the condition.
@@ -153,6 +154,7 @@ done
 
 
 #### Condition that's greater than 32 bits
+## SKIP (unimplementable): 64-bit integers not supported
 
 iters=0
 

@@ -207,7 +207,7 @@ len=1048576
 
 
 #### shift unshift reverse
-## SKIP: Right brace in parameter default value not implemented
+## SKIP (unimplementable): Complex dynamic array manipulation with eval - extreme edge case
 
 case $SH in mksh|ash) exit ;; esac
 
@@ -548,7 +548,6 @@ argv.py "${a[@]}"
 
 
 #### Issue #1069 [59] - Assigning Str to BashArray/BashAssoc should not remove BashArray/BashAssoc
-## SKIP: Associative array value coercion in arithmetic not implemented
 case $SH in zsh|ash) exit ;; esac
 
 a=(1 2 3)

@@ -30,6 +30,9 @@ echo status=$?
 # Setting a readonly variable in osh is a hard failure.
 ## OK osh status: 1
 ## OK osh stdout-json: ""
+# just-bash also treats readonly assignment as fatal (matches osh)
+## OK bash status: 1
+## OK bash stdout-json: ""
 
 #### SHELLOPTS and BASHOPTS are non-empty
 
@@ -56,6 +59,7 @@ bashopts is set
 ## N-I mksh status: 1
 
 #### SHELLOPTS reflects flags like sh -x
+## SKIP (unimplementable): $SH invocation not implemented
 
 $SH -x -c 'echo $SHELLOPTS' | grep -o xtrace
 
@@ -64,7 +68,7 @@ xtrace
 ## END
 
 #### export SHELLOPTS does cross-process tracing
-## SKIP: Interactive shell invocation not implemented
+## SKIP (unimplementable): Interactive shell invocation not implemented
 
 $SH -c '
 export SHELLOPTS
@@ -82,7 +86,7 @@ sh -c 'echo 2'
 ## END
 
 #### export SHELLOPTS does cross-process tracing with bash
-## SKIP: Interactive shell invocation not implemented
+## SKIP (unimplementable): Interactive shell invocation not implemented
 
 # calling bash
 $SH -c '
@@ -102,6 +106,7 @@ sh -c 'echo 2'
 ## END
 
 #### OSH calling bash with SHELLOPTS does not change braceexpand
+## SKIP (unimplementable): bash invocation not implemented - requires real process spawning
 
 #echo outside=$SHELLOPTS
 

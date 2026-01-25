@@ -26,7 +26,12 @@ import {
   ArithmeticError,
   ExecutionLimitError,
   ExitError,
+  PosixFatalError,
 } from "./interpreter/errors.js";
+import {
+  buildBashopts,
+  buildShellopts,
+} from "./interpreter/helpers/shellopts.js";
 import {
   Interpreter,
   type InterpreterOptions,
@@ -38,6 +43,7 @@ import {
   type NetworkConfig,
   type SecureFetch,
 } from "./network/index.js";
+import { LexerError } from "./parser/lexer.js";
 import { type ParseException, parse } from "./parser/parser.js";
 import type {
   BashExecResult,
@@ -170,13 +176,15 @@ export class Bash {
     const cwd = options.cwd || (this.useDefaultLayout ? "/home/user" : "/");
     const env: Record<string, string> = {
       HOME: this.useDefaultLayout ? "/home/user" : "/",
-      PATH: "/bin:/usr/bin",
+      PATH: "/usr/bin:/bin",
       IFS: " \t\n",
       OSTYPE: "linux-gnu",
       MACHTYPE: "x86_64-pc-linux-gnu",
       HOSTTYPE: "x86_64",
+      HOSTNAME: "localhost", // Match hostname command in sandboxed environment
       PWD: cwd,
       OLDPWD: cwd,
+      OPTIND: "1", // getopts option index
       ...options.env,
     };
 
@@ -223,6 +231,8 @@ export class Bash {
       lastArg: "", // $_ is initially empty (or could be shell name)
       startTime: Date.now(),
       lastBackgroundPid: 0,
+      bashPid: process.pid, // BASHPID starts as the main process PID
+      nextVirtualPid: process.pid + 1, // Counter for unique subshell PIDs
       currentLine: 1, // $LINENO starts at 1
       options: {
         errexit: false,
@@ -230,10 +240,49 @@ export class Bash {
         nounset: false,
         xtrace: false,
         verbose: false,
+        posix: false,
+        allexport: false,
+        noclobber: false,
+        noglob: false,
+        noexec: false,
+        vi: false,
+        emacs: false,
+      },
+      shoptOptions: {
+        extglob: false,
+        dotglob: false,
+        nullglob: false,
+        failglob: false,
+        globstar: false,
+        globskipdots: true, // Default to true in bash >=5.2
+        nocaseglob: false,
+        nocasematch: false,
+        expand_aliases: false,
+        lastpipe: false,
+        xpg_echo: false,
       },
       inCondition: false,
       loopDepth: 0,
+      // Export standard shell variables by default (matches bash behavior)
+      // These variables are typically inherited from the parent shell environment
+      exportedVars: new Set([
+        "HOME",
+        "PATH",
+        "PWD",
+        "OLDPWD",
+        // Also export any user-provided environment variables
+        ...Object.keys(options.env || {}),
+      ]),
+      // SHELLOPTS and BASHOPTS are readonly
+      readonlyVars: new Set(["SHELLOPTS", "BASHOPTS"]),
+      // Hash table for PATH command lookup caching
+      hashTable: new Map(),
     };
+
+    // Initialize SHELLOPTS to reflect current shell options (initially empty string since all are false)
+    this.state.env.SHELLOPTS = buildShellopts(this.state.options);
+    // Initialize BASHOPTS to reflect current shopt options
+    this.state.env.BASHOPTS = buildBashopts(this.state.shoptOptions);
 
     // Initialize filesystem with standard directories and device files
     // Only applies to InMemoryFs - other filesystems use real directories
@@ -272,17 +321,22 @@ export class Bash {
 
   registerCommand(command: Command): void {
     this.commands.set(command.name, command);
-    // Create command stubs in /bin for PATH-based resolution
+    // Create command stubs in /bin and /usr/bin for PATH-based resolution
     // Works for both InMemoryFs and OverlayFs (both have writeFileSync)
+    // Commands are registered to both locations like real Linux systems
+    // (where /bin is often a symlink to /usr/bin on modern systems)
     const fs = this.fs as {
       writeFileSync?: (path: string, content: string) => void;
     };
     if (typeof fs.writeFileSync === "function") {
+      const stub = `#!/bin/bash\n# Built-in command: ${command.name}\n`;
       try {
-        fs.writeFileSync(
-          `/bin/${command.name}`,
-          `#!/bin/bash\n# Built-in command: ${command.name}\n`,
-        );
+        fs.writeFileSync(`/bin/${command.name}`, stub);
+      } catch {
+        // Ignore errors
+      }
+      try {
+        fs.writeFileSync(`/usr/bin/${command.name}`, stub);
       } catch {
         // Ignore errors
       }
@@ -335,19 +389,49 @@ export class Bash {
     // Each exec call gets an isolated state copy - like starting a new shell
     // This ensures exec calls never interfere with each other
     const effectiveCwd = options?.cwd ?? this.state.cwd;
+
+    // Determine PWD and cwd for the new shell context
+    // If PWD is in the provided env, use it (inherited from parent)
+    // If PWD is NOT in the provided env (was unset), use realpath to get physical path
+    // This matches bash behavior: when PWD is unset and a new shell starts,
+    // it initializes PWD (and cwd) using realpath (resolving symlinks)
+    let newPwd: string | undefined;
+    let newCwd = effectiveCwd;
+    if (options?.cwd) {
+      if (options.env && "PWD" in options.env) {
+        // PWD explicitly provided - use it
+        newPwd = options.env.PWD;
+      } else if (options?.env && !("PWD" in options.env)) {
+        // PWD not in provided env - use realpath to resolve symlinks
+        // This also updates cwd since the shell determines its position from scratch
+        try {
+          newPwd = await this.fs.realpath(effectiveCwd);
+          newCwd = newPwd; // Both PWD and cwd should be the physical path
+        } catch {
+          // Fallback to logical path if realpath fails
+          newPwd = effectiveCwd;
+        }
+      } else {
+        // No env provided - use logical cwd
+        newPwd = effectiveCwd;
+      }
+    }
+
     const execState: InterpreterState = {
       ...this.state,
       env: {
         ...this.state.env,
         ...options?.env,
         // Update PWD when cwd option is provided
-        ...(options?.cwd ? { PWD: options.cwd } : {}),
+        ...(newPwd !== undefined ? { PWD: newPwd } : {}),
       },
-      cwd: effectiveCwd,
+      cwd: newCwd,
       // Deep copy mutable objects to prevent interference
       functions: new Map(this.state.functions),
       localScopes: [...this.state.localScopes],
       options: { ...this.state.options },
+      // Share hashTable reference - it should persist across exec calls
+      hashTable: this.state.hashTable,
     };
 
     // Normalize indented multi-line scripts (unless rawScript is true)
@@ -386,6 +470,15 @@ export class Bash {
           env: { ...this.state.env, ...options?.env },
         });
       }
+      // PosixFatalError propagates from special builtins in POSIX mode
+      if (error instanceof PosixFatalError) {
+        return this.logResult({
+          stdout: error.stdout,
+          stderr: error.stderr,
+          exitCode: error.exitCode,
+          env: { ...this.state.env, ...options?.env },
+        });
+      }
       if (error instanceof ArithmeticError) {
         return this.logResult({
           stdout: error.stdout,
@@ -408,6 +501,15 @@ export class Bash {
         return this.logResult({
           stdout: "",
           stderr: `bash: syntax error: ${(error as Error).message}\n`,
+          exitCode: 2,
+          env: { ...this.state.env, ...options?.env },
+        });
+      }
+      // LexerError is thrown for lexer-level issues like unterminated quotes
+      if (error instanceof LexerError) {
+        return this.logResult({
+          stdout: "",
+          stderr: `bash: ${error.message}\n`,
           exitCode: 2,
           env: { ...this.state.env, ...options?.env },
         });

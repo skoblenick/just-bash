@@ -11,7 +11,7 @@ true extra
 ## END
 
 #### shift 1 extra
-## SKIP: Interactive shell invocation not implemented
+## SKIP (unimplementable): Interactive shell invocation not implemented
 $SH -c '
 set -- a b c
 shift 1 extra
@@ -27,7 +27,6 @@ fail
 ## END
 
 #### continue 1 extra, break, etc.
-## SKIP: Interactive shell invocation not implemented
 $SH -c '
 for i in foo; do
   continue 1 extra

@@ -2,7 +2,6 @@
 ## compare_shells: bash dash mksh
 
 #### >& and <& are the same
-## SKIP: Advanced file descriptor redirections not implemented
 
 echo one 1>&2
 
@@ -15,7 +14,6 @@ two
 
 
 #### <&
-## SKIP: Advanced file descriptor redirections not implemented
 # Is there a simpler test case for this?
 echo foo51 > $TMP/lessamp.txt
 
@@ -82,7 +80,6 @@ cat $TMP/file-redir2.txt
 ## stdout: two 1
 
 #### Descriptor redirect with filename
-## SKIP: Redirect descriptor to filename variable not implemented
 # bash/mksh treat this like a filename, not a descriptor.
 # dash aborts.
 echo one 1>&$TMP/nonexistent-filename__
@@ -93,7 +90,6 @@ echo "status=$?"
 ## OK dash status: 2
 
 #### Redirect echo to stderr, and then redirect all of stdout somewhere.
-## SKIP: Stderr output inside command block with stdout redirect not working
 { echo foo52 1>&2; echo 012345789; } > $TMP/block-stdout.txt
 cat $TMP/block-stdout.txt |  wc -c 
 ## stderr: foo52
@@ -117,7 +113,6 @@ cat "$TMP/double-digit-fd.txt"
 ## BUG dash status: 127
 
 #### : 9> fdleak (OSH regression)
-## SKIP: FD propagation across statements not implemented
 true 9> "$TMP/fd.txt"
 ( echo world >&9 )
 cat "$TMP/fd.txt"
@@ -196,7 +191,6 @@ echo DONE
 ## OK dash status: 2
 
 #### Redirect to file descriptor that's not open
-## SKIP: /proc filesystem not available
 # Notes:
 # - 7/2021: descriptor 7 seems to work on all CI systems.  The process state
 #   isn't clean, but we could probably close it in OSH?
@@ -243,7 +237,6 @@ four
 ## status: 0
 
 #### >| to clobber
-## SKIP: noclobber (set -C) not implemented
 echo XX >| $TMP/c.txt
 
 set -o noclobber
@@ -285,8 +278,6 @@ STDERR
 ## N-I dash status: 1
 
 #### >&word redirects stdout and stderr when word is not a number or -
-## SKIP: stdout_stderr.py test helper not available
-
 # dash, mksh don't implement this bash behaviour.
 case $SH in dash|mksh) exit 1 ;; esac
 
@@ -306,7 +297,6 @@ STDERR
 ## N-I dash/mksh stdout-json: ""
 
 #### 1>&- to close file descriptor
-## SKIP: File descriptor close/move syntax (>&-) not implemented
 exec 5> "$TMP/f.txt"
 echo hello >&5
 exec 5>&-
@@ -317,7 +307,6 @@ hello
 ## END
 
 #### 1>&2- to move file descriptor
-## SKIP: File descriptor close/move syntax (>&-) not implemented
 exec 5> "$TMP/f.txt"
 echo hello5 >&5
 exec 6>&5-
@@ -335,8 +324,6 @@ world6
 ## N-I mksh stdout-json: ""
 
 #### 1>&2- (Bash bug: fail to restore closed fd)
-## SKIP: File descriptor close/move syntax (>&-) not implemented
-
 # 7/2021: descriptor 8 is open on Github Actions, so use descriptor 6 instead
 
 # Fix for CI systems where process state isn't clean: Close descriptors 6 and 7.
@@ -371,7 +358,6 @@ cat "$TMP/f.txt"
 ## BUG bash stdout: hello
 
 #### <> for read/write
-## SKIP: Advanced file descriptor redirections not implemented
 echo first >$TMP/rw.txt
 exec 8<>$TMP/rw.txt
 read line <&8
@@ -387,7 +373,7 @@ second
 ## END
 
 #### <> for read/write named pipes
-## SKIP: File descriptor close/move syntax (>&-) not implemented
+## SKIP (unimplementable): Named pipes (mkfifo) not implemented and fd read/write with pipes not working
 rm -f "$TMP/f.pipe"
 mkfifo "$TMP/f.pipe"
 exec 8<> "$TMP/f.pipe"
@@ -423,7 +409,6 @@ ok
 ## N-I dash status: 1
 
 #### exec redirect then various builtins
-## SKIP: Advanced file descriptor redirections not implemented
 exec 5>$TMP/log.txt
 echo hi >&5
 set -o >&5
@@ -469,7 +454,6 @@ echo hello
 # dash/mksh terminates the execution of script on the redirection.
 
 #### echo foo >&100 (OSH regression: does not fail with invalid fd 100)
-## SKIP: Redirect to high fd number not implemented
 # oil 0.8.pre4 does not fail with non-existent fd 100.
 fd=100
 echo foo53 >&$fd
@@ -478,7 +462,6 @@ echo foo53 >&$fd
 ## OK dash status: 2
 
 #### echo foo >&N where N is first unused fd
-## SKIP: Redirect to high fd number not implemented
 # 1. prepare default fd for internal uses
 minfd=10
 case ${SH##*/} in
@@ -505,7 +488,6 @@ echo foo54 >&$fd
 ## OK dash status: 2
 
 #### exec {fd}>&- (OSH regression: fails to close fd)
-## SKIP: File descriptor variable syntax ({fd}>file) not implemented
 # mksh, dash do not implement {fd} redirections.
 case $SH in mksh|dash) exit 1 ;; esac
 # oil 0.8.pre4 fails to close fd by {fd}&-.
@@ -519,7 +501,6 @@ cat file1
 ## N-I mksh/dash status: 1
 
 #### noclobber can still write to non-regular files like /dev/null
-## SKIP: noclobber (set -C) not implemented
 set -C  # noclobber
 set -e  # errexit (raise any redirection errors)
 
@@ -537,7 +518,6 @@ a
 ## END
 
 #### Parsing of x=1> and related cases
-## SKIP: Variable assignment vs redirect parsing ambiguity not implemented
 
 echo x=1>/dev/stdout
 echo x=1 >/dev/stdout
@@ -560,7 +540,6 @@ a1
 ## END
 
 #### Parsing of x={myvar} and related cases
-## SKIP: File descriptor variable syntax ({fd}>file) not implemented
 case $SH in dash) exit ;; esac
 
 echo {myvar}>/dev/stdout

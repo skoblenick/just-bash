@@ -64,13 +64,13 @@ argv.py $(echo 'hi there') "$(echo 'hi there')"
 ## stdout: ['hi', 'there', 'hi there']
 
 #### Command Sub trailing newline removed
-## SKIP: python2 not available
+## SKIP (unimplementable): python2 not available
 s=$(python2 -c 'print("ab\ncd\n")')
 argv.py "$s"
 ## stdout: ['ab\ncd']
 
 #### Command Sub trailing whitespace not removed
-## SKIP: python2 not available
+## SKIP (unimplementable): python2 not available
 s=$(python2 -c 'print("ab\ncd\n ")')
 argv.py "$s"
 ## stdout: ['ab\ncd\n ']
@@ -143,7 +143,6 @@ echo 1 `echo \"`
 ## END
 
 #### Quoting $ within ``
-## SKIP: Complex quoting in backticks not implemented
 echo 1 `echo $`
 echo 2 `echo \$`
 echo 3 `echo \\$`
@@ -158,7 +157,6 @@ echo 5 `echo \\\\$`
 ## END
 
 #### Quoting $ within `` within double quotes
-## SKIP: Complex quoting in backticks not implemented
 echo "1 `echo $`"
 echo "2 `echo \$`"
 echo "3 `echo \\$`"
@@ -248,7 +246,6 @@ echo `echo \\"foo\\"`
 ## END
 
 #### More levels of double quotes in backticks
-## SKIP: Multiple escape levels in backticks not implemented
 
 # Shells don't agree here, some of them give you form feeds!
 # There are two levels of processing I don't understand.
@@ -269,7 +266,6 @@ echo `echo \\\\\"foo\\\\\"` -
 ## BUG dash/mksh stdout-json: "\u000coo\\ -\n\u000coo\\ -\n\\\"foo\\\" -\n"
 
 #### Syntax errors with double quotes within backticks
-## SKIP: Interactive shell invocation not implemented
 
 # bash does print syntax errors but somehow it exits 0
 

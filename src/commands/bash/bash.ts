@@ -34,9 +34,12 @@ export const bashCommand: Command = {
       return executeScript(command, scriptName, scriptArgs, ctx);
     }
 
-    // No arguments - in real bash this would be interactive mode
-    // In our implementation, we just return success
+    // No arguments - read script from stdin if available
     if (args.length === 0) {
+      if (ctx.stdin?.trim()) {
+        return executeScript(ctx.stdin, "bash", [], ctx);
+      }
+      // No stdin - return success (interactive mode not supported)
       return { stdout: "", stderr: "", exitCode: 0 };
     }
 
@@ -81,7 +84,12 @@ export const shCommand: Command = {
       return executeScript(command, scriptName, scriptArgs, ctx);
     }
 
+    // No arguments - read script from stdin if available
     if (args.length === 0) {
+      if (ctx.stdin?.trim()) {
+        return executeScript(ctx.stdin, "sh", [], ctx);
+      }
+      // No stdin - return success (interactive mode not supported)
       return { stdout: "", stderr: "", exitCode: 0 };
     }
 
@@ -116,9 +124,13 @@ async function executeScript(
     };
   }
 
-  // Build positional parameters for the exec env option
-  // Each exec is isolated, so we pass parameters via the env option
+  // Build environment for the exec call
+  // Include exported environment from parent (for prefix assignments like "FOO=bar exec sh -c '...'")
+  // plus positional parameters
   const positionalEnv: Record<string, string> = {
+    // Inherit exported environment from parent context
+    ...(ctx.exportedEnv || {}),
+    // Override with positional parameters
     "0": scriptName,
     "#": String(scriptArgs.length),
     "@": scriptArgs.join(" "),
@@ -137,21 +149,10 @@ async function executeScript(
     }
   }
 
-  // Process the script line by line, filtering out comments and empty lines
-  const lines = scriptToRun.split("\n");
-  const commands: string[] = [];
-  for (const line of lines) {
-    const trimmed = line.trim();
-    // Skip empty lines and comment lines
-    if (trimmed && !trimmed.startsWith("#")) {
-      commands.push(trimmed);
-    }
-  }
-
-  // Execute all commands joined by semicolons
-  // Pass positional parameters via the env option
-  const commandString = commands.join("; ");
-  const result = await ctx.exec(commandString, {
+  // Execute the script as-is, preserving newlines for proper parsing
+  // The parser needs to see the original structure to correctly handle
+  // multi-line constructs like (( ... )) vs ( ( ... ) )
+  const result = await ctx.exec(scriptToRun, {
     env: positionalEnv,
     cwd: ctx.cwd,
   });

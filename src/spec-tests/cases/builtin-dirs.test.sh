@@ -11,7 +11,7 @@ popd
 echo -n pwd=; pwd
 ## status: 0
 ## STDOUT:
-/tmp /
+~ /
 pwd=/tmp
 /
 pwd=/
@@ -72,7 +72,6 @@ directory stack
 ## END
 
 #### cd replaces the lowest entry on the directory stack!
-
 # stable temp dir
 dir=/tmp/oils-spec/builtin-dirs
 
@@ -97,9 +96,9 @@ echo popd=$?
 
 ## STDOUT:
 pushd=0
-/tmp /tmp/oils-spec/builtin-dirs
+~ ~/oils-spec/builtin-dirs
 cd=0
-/ /tmp/oils-spec/builtin-dirs
+/ ~/oils-spec/builtin-dirs
 popd=0
 popd=1
 ## END
@@ -124,9 +123,9 @@ dirs
 ## status: 0
 ## STDOUT:
 --
-/tmp /
+~ /
 --
-/tmp
+~
 ## END
 
 #### dirs -v to print numbered stack, one entry per line
@@ -141,11 +140,11 @@ dirs -v
 ## status: 0
 ## STDOUT:
 --
- 0  /tmp
+ 0  ~
  1  /
 --
  0  /dev
- 1  /tmp
+ 1  ~
  2  /
 ## END
 #
@@ -163,11 +162,11 @@ echo --
 dirs -p
 ## STDOUT:
 --
-/tmp
+~
 /
 --
 /dev
-/tmp
+~
 /
 ## END
 
@@ -232,14 +231,14 @@ dirs
 cd /tmp
 pushd .. >/dev/null
 dirs
-## stdout: / /tmp
+## stdout: / ~
 ## status: 0
 
 #### dirs test of path alias `.`
 cd /tmp
 pushd . >/dev/null
 dirs
-## stdout: /tmp /tmp
+## stdout: ~ ~
 ## status: 0
 
 #### pushd does not take more than one argument

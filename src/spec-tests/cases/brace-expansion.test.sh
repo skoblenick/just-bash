@@ -55,7 +55,6 @@ echo -{$a,b}-
 ## stdout: -A- -b-
 
 #### double expansion with simple var -- bash bug
-## SKIP: Brace expansion with variables order not implemented
 # bash is inconsistent with the above
 a=A
 echo {$a,b}_{c,d}
@@ -69,7 +68,6 @@ echo {${a},b}_{c,d}
 ## stdout: A_c A_d b_c b_d
 
 #### double expansion with literal and simple var
-## SKIP: Double brace expansion with variables not implemented
 a=A
 echo {_$a,b}_{c,d}
 ## stdout: _A_c _A_d b_c b_d
@@ -107,7 +105,6 @@ echo a{X,,Y}b
 ## stdout: aXb ab aYb
 
 #### Empty alternative
-## SKIP: argv.py test helper not available
 # zsh and mksh don't do word elision, probably because they do brace expansion
 # AFTER variable substitution.
 argv.py {X,,Y,}
@@ -200,7 +197,6 @@ foo~/bar ~/bar
 ## END
 
 #### Two kinds of tilde expansion
-## SKIP: Tilde expansion with brace not implemented
 
 HOME=/home/bob
 
@@ -372,7 +368,6 @@ echo -{e..a..2}-
 ## N-I mksh/zsh status: 0
 
 #### Mixed case char expansion is invalid
-## SKIP: Mixed case character ranges in brace expansion not implemented
 case $SH in *zsh) echo BUG; exit ;; esac
 echo -{z..A}-
 echo -{z..A..2}-
@@ -464,7 +459,6 @@ a{} b{}
 ## END
 
 #### OSH provides an alternative to invalid syntax
-## SKIP: Escaped braces in brace expansion not implemented
 echo -{a,b}\{1...3\}-
 echo -{a,\{1...3\}}-
 echo {a,b}\{\}
@@ -475,7 +469,6 @@ a{} b{}
 ## END
 
 #### Side effect in expansion
-## SKIP: Side effects in brace expansion not implemented
 # bash is the only one that does it first.  I guess since this is
 # non-POSIX anyway, follow bash?
 i=0

@@ -280,8 +280,8 @@ PATH=/bin:_tmp  # control output
 type -a pwd
 echo ---
 
-pwd () 
-{ 
+pwd ()
+{
     echo function-too
 }
 

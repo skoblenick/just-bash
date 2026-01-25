@@ -181,9 +181,6 @@ The `set -f` option to disable pathname expansion is not implemented.
 - **AI Use Case**: Safely handle untrusted input containing glob characters (`*`, `?`, `[`)
 - Example: `set -f; echo $untrusted_var; set +f`
 
-#### noexec / set -n (1 test)
-The `set -n` option to parse but not execute commands is not implemented.
-
 #### globskipdots (3 tests)
 The `shopt -s globskipdots` option is not implemented.
 
@@ -215,8 +212,10 @@ The `%q` format for shell quoting and `set` output format are not implemented.
 - **AI Use Case**: Safely quote strings when agents generate shell commands programmatically
 - Example: `printf '%q ' "$untrusted_input"` for safe command construction
 
-#### printf strftime (4 tests)
-The `%(format)T` strftime format is not implemented.
+#### printf strftime (2 tests)
+The `%(format)T` strftime format is implemented. Remaining skipped tests:
+- TZ export semantics differ (our interpreter runs in same process so TZ affects libc regardless)
+- Bash-specific 128-byte strftime buffer truncation not implemented
 
 #### hash (3 tests)
 The `hash` builtin for managing the command hash table is not implemented.

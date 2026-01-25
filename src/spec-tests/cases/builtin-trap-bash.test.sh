@@ -87,7 +87,7 @@ status=0
 ## END
 
 #### but trap DEBUG respects errexit
-## SKIP: errexit in compound commands/pipelines not implemented
+## SKIP (unimplementable): trap DEBUG not implemented
 set -o errexit
 
 debuglog() {
@@ -165,7 +165,7 @@ echo status=$?
 
 
 #### trap DEBUG with non-compound commands
-## SKIP: $LINENO in conditional/arithmetic context not implemented
+## SKIP (unimplementable): trap builtin not implemented
 case $SH in dash|mksh) exit ;; esac
 
 debuglog() {
@@ -462,7 +462,7 @@ ok
 ## END
 
 #### trap DEBUG for expr
-## SKIP: $LINENO in conditional/arithmetic context not implemented
+## SKIP (unimplementable): trap builtin not implemented
 debuglog() {
   echo "  [$@]"
 }
@@ -520,7 +520,12 @@ if
 
 
 #### trap RETURN
-## SKIP: Test data directory not available
+# Create return-helper.sh inline
+cat > /tmp/return-helper.sh <<'SCRIPT'
+echo return-helper.sh
+return 42
+SCRIPT
+
 profile() {
   echo "profile [$@]"
 }
@@ -540,7 +545,7 @@ f() {
 # That's not what the manual says.
 trap 'profile x y' RETURN
 f
-. $REPO_ROOT/spec/testdata/return-helper.sh
+. /tmp/return-helper.sh
 ## status: 42
 ## STDOUT:
 --

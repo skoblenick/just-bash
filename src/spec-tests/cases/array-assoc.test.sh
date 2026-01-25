@@ -127,7 +127,7 @@ argv.py ${!A[@]}
 ['X', 'X', 'Y', 'Y']
 ## END
 
-#### ${A[@]/b/B} 
+#### ${A[@]/b/B}
 # but ${!A[@]/b/B} doesn't work
 declare -A A
 A['aa']=bbb
@@ -280,7 +280,6 @@ argv.py "${d['key']}"
 ## stdout: ['1 2 3']
 
 #### Indexed array as key of associative array coerces to string (without shopt -s strict_array)
-
 declare -a array=(1 2 3)
 declare -A assoc
 assoc[42]=43
@@ -323,18 +322,8 @@ argv.py ${a[@]: 4: 3}
 argv.py ${a[@]: 5: 3}
 ## stdout-json: ""
 ## status: 1
-## BUG bash STDOUT:
-['2', '1', '5']
-['2', '1', '5']
-['1', '5', '4']
-['5', '4', '3']
-['4', '3']
-['3']
-## END
-## BUG bash status: 0
 
 #### bash variable can have an associative array part and a string part
-
 # and $assoc is equivalent to ${assoc[0]}, just like regular arrays
 declare -A assoc
 assoc[1]=1
@@ -406,6 +395,9 @@ A['x']=1
 echo status=$?
 ## OK osh status: 1
 ## OK osh stdout-json: ""
+# just-bash treats readonly assignment as fatal (matches osh)
+## OK bash status: 1
+## OK bash stdout-json: ""
 ## STDOUT:
 status=1
 ## END
@@ -516,7 +508,6 @@ values: val3
 ## END
 
 #### ${!ref} and assoc array
-
 show-values() {
   echo values: ${A[@]}
 }
@@ -538,7 +529,6 @@ ref val
 ## END
 
 #### printf -v and assoc array
-
 show-values() {
   echo values: ${assoc[@]}
 }
@@ -565,7 +555,6 @@ values: /val3/
 ## END
 
 #### bash bug: (( A["$key"] = 1 )) doesn't work
-key='\'
 declare -A A
 #A["$key"]=1
 
@@ -600,7 +589,6 @@ argv.py "${arr[@]}"
 ## END
 
 #### test -v assoc[key]
-## SKIP: Associative array value coercion in arithmetic not implemented
 
 typeset -A assoc
 assoc=([empty]='' [k]=v)
@@ -643,7 +631,6 @@ nonexistent=1
 ## END
 
 #### test -v with dynamic parsing
-## SKIP: Associative array value coercion in arithmetic not implemented
 
 typeset -A assoc
 assoc=([empty]='' [k]=v)
@@ -667,7 +654,6 @@ nonexistent=1
 ## END
 
 #### [[ -v assoc[key] ]]
-## SKIP: [[ ]] runtime and env prefix edge cases not implemented
 
 typeset -A assoc
 assoc=([empty]='' [k]=v)
@@ -735,8 +721,6 @@ nonexistent=1
 ## END
 
 #### [[ -v assoc[key] ]] syntax errors
-## SKIP: Associative array value coercion in arithmetic not implemented
-
 typeset -A assoc
 assoc=([empty]='' [k]=v)
 
@@ -757,7 +741,6 @@ typo=1
 
 
 #### BashAssoc a+=()
-
 declare -A a=([apple]=red [orange]=orange)
 a+=([lemon]=yellow [banana]=yellow)
 echo "apple is ${a['apple']}"
@@ -774,7 +757,6 @@ banana is yellow
 
 
 #### BashAssoc ${a[@]@Q}
-## SKIP: Read-write file descriptor (<>) not implemented
 
 declare -A a=()
 a['symbol1']=\'\'

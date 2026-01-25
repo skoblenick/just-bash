@@ -6,7 +6,6 @@
 
 
 #### Unrecoverable: divide by zero in redirect word
-## SKIP: Interactive shell invocation not implemented
 
 $SH -c '
 echo hi > file$(( 42 / 0 )) in
@@ -30,7 +29,6 @@ outside=0
 
 
 #### Unrecoverable: divide by zero in conditional word
-## SKIP: Interactive shell invocation not implemented
 
 $SH -c '
 if test foo$(( 42 / 0 )) = foo; then
@@ -83,7 +81,6 @@ outside=0
 
 
 #### Unrecoverable: divide by zero in case
-## SKIP: Interactive shell invocation not implemented
 
 $SH -c '
 case $(( 42 / 0 )) in
@@ -133,7 +130,6 @@ outside=0
 
 
 #### Unrecoverable: ${undef?message}
-## SKIP: Interactive shell invocation not implemented
 
 $SH -c '
 echo ${undef?message}
@@ -163,7 +159,6 @@ outside=127
 ## END
 
 #### ${undef} with nounset
-## SKIP: Interactive shell invocation not implemented
 
 $SH -c '
 set -o nounset

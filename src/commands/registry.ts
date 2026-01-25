@@ -17,6 +17,7 @@ export type CommandName =
   | "printf"
   | "ls"
   | "mkdir"
+  | "rmdir"
   | "touch"
   | "rm"
   | "cp"
@@ -91,7 +92,9 @@ export type CommandName =
   | "tar"
   | "yq"
   | "xan"
-  | "sqlite3";
+  | "sqlite3"
+  | "time"
+  | "whoami";
 
 /** Network command names (only available when network is configured) */
 export type NetworkCommandName = "curl";
@@ -123,6 +126,10 @@ const commandLoaders: LazyCommandDef<CommandName>[] = [
   {
     name: "mkdir",
     load: async () => (await import("./mkdir/mkdir.js")).mkdirCommand,
+  },
+  {
+    name: "rmdir",
+    load: async () => (await import("./rmdir/rmdir.js")).rmdirCommand,
   },
   {
     name: "touch",
@@ -369,6 +376,10 @@ const commandLoaders: LazyCommandDef<CommandName>[] = [
     load: async () => (await import("./timeout/timeout.js")).timeoutCommand,
   },
   {
+    name: "time",
+    load: async () => (await import("./time/time.js")).timeCommand,
+  },
+  {
     name: "seq",
     load: async () => (await import("./seq/seq.js")).seqCommand,
   },
@@ -425,6 +436,10 @@ const commandLoaders: LazyCommandDef<CommandName>[] = [
   {
     name: "hostname",
     load: async () => (await import("./hostname/hostname.js")).hostname,
+  },
+  {
+    name: "whoami",
+    load: async () => (await import("./whoami/whoami.js")).whoami,
   },
   {
     name: "od",

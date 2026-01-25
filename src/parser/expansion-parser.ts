@@ -6,6 +6,7 @@
 
 import {
   AST,
+  type InnerParameterOperation,
   type ParameterExpansionPart,
   type ParameterOperation,
   type WordNode,
@@ -13,7 +14,41 @@ import {
 } from "../ast/types.js";
 import { parseArithmeticExpression } from "./arithmetic-parser.js";
 import type { Parser } from "./parser.js";
+import { ParseException } from "./types.js";
 import * as WordParser from "./word-parser.js";
+
+/**
+ * Find the closing parenthesis for an extglob pattern starting at openIdx.
+ * Handles nested extglob patterns and escaped characters.
+ */
+function findExtglobClose(value: string, openIdx: number): number {
+  let depth = 1;
+  let i = openIdx + 1;
+  while (i < value.length && depth > 0) {
+    const c = value[i];
+    if (c === "\\") {
+      i += 2; // Skip escaped char
+      continue;
+    }
+    // Handle nested extglob patterns
+    if ("@*+?!".includes(c) && i + 1 < value.length && value[i + 1] === "(") {
+      i++; // Skip the extglob operator
+      depth++;
+      i++; // Skip the (
+      continue;
+    }
+    if (c === "(") {
+      depth++;
+    } else if (c === ")") {
+      depth--;
+      if (depth === 0) {
+        return i;
+      }
+    }
+    i++;
+  }
+  return -1;
+}
 
 function parseSimpleParameter(
   _p: Parser,
@@ -89,29 +124,107 @@ function parseParameterExpansion(
     const closeIdx = WordParser.findMatchingBracket(p, value, i, "[", "]");
     name += value.slice(i, closeIdx + 1);
     i = closeIdx + 1;
+
+    // Check for multiple subscripts like ${a[0][0]} - this is invalid syntax
+    if (value[i] === "[") {
+      // Find closing } to get full expansion text for error message
+      let depth = 1;
+      let j = i;
+      while (j < value.length && depth > 0) {
+        if (value[j] === "{") depth++;
+        else if (value[j] === "}") depth--;
+        if (depth > 0) j++;
+      }
+      const badText = value.slice(start + 2, j); // Content between ${ and }
+      return {
+        part: AST.parameterExpansion("", {
+          type: "BadSubstitution",
+          text: badText,
+        }),
+        endIndex: j + 1,
+      };
+    }
   }
 
   // Check for invalid parameter expansion with empty name and operator
-  // e.g., ${%} - there's no parameter before the %
+  // e.g., ${%} or ${(x)foo} - there's no valid parameter before the operator
+  // Instead of erroring at parse time, create a BadSubstitution operation
+  // so the error is deferred to runtime (matching bash behavior where
+  // code inside `if false; then ... fi` doesn't error)
   if (name === "" && !indirection && !lengthOp && value[i] !== "}") {
-    p.error(`\${${value[i]}}: bad substitution`);
+    // Find the closing } to get the full invalid text
+    let depth = 1;
+    let j = i;
+    while (j < value.length && depth > 0) {
+      if (value[j] === "{") depth++;
+      else if (value[j] === "}") depth--;
+      if (depth > 0) j++;
+    }
+    // If we didn't find a closing }, this is an unterminated expansion - throw parse error
+    if (depth > 0) {
+      throw new ParseException(
+        "unexpected EOF while looking for matching '}'",
+        0,
+        0,
+      );
+    }
+    const badText = value.slice(start + 2, j); // Content between ${ and }
+    return {
+      part: AST.parameterExpansion("", {
+        type: "BadSubstitution",
+        text: badText,
+      }),
+      endIndex: j + 1,
+    };
   }
 
   let operation: ParameterOperation | null = null;
 
   if (indirection) {
     // Check for ${!arr[@]} or ${!arr[*]} - array keys/indices
+    // BUT only if there are no suffix operators - with operators it's indirect expansion
     const arrayKeysMatch = name.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\[([@*])\]$/);
     if (arrayKeysMatch) {
-      operation = {
-        type: "ArrayKeys",
-        array: arrayKeysMatch[1],
-        star: arrayKeysMatch[2] === "*",
-      };
-      // Clear name so it doesn't get treated as a variable
-      name = "";
-    } else if (value[i] === "*" || value[i] === "@") {
+      // Check if there are additional operators (e.g., ${!ref[@]:2})
+      // If so, this is indirect expansion through array values, not array keys
+      if (
+        i < value.length &&
+        value[i] !== "}" &&
+        /[:=\-+?#%/^,@]/.test(value[i])
+      ) {
+        // Parse as indirection with innerOp - the array expansion happens at runtime
+        const opResult = parseParameterOperation(p, value, i, name, quoted);
+        if (opResult.operation) {
+          operation = {
+            type: "Indirection",
+            innerOp: opResult.operation as InnerParameterOperation,
+          };
+          i = opResult.endIndex;
+        } else {
+          // Fallback to ArrayKeys if no operation parsed
+          operation = {
+            type: "ArrayKeys",
+            array: arrayKeysMatch[1],
+            star: arrayKeysMatch[2] === "*",
+          };
+          name = "";
+        }
+      } else {
+        // No suffix operators - this is array keys
+        operation = {
+          type: "ArrayKeys",
+          array: arrayKeysMatch[1],
+          star: arrayKeysMatch[2] === "*",
+        };
+        // Clear name so it doesn't get treated as a variable
+        name = "";
+      }
+    } else if (
+      value[i] === "*" ||
+      (value[i] === "@" && !/[QPaAEKkuUL]/.test(value[i + 1] || ""))
+    ) {
       // Check for ${!prefix*} or ${!prefix@} - list variables with prefix
+      // But NOT ${!var@P} which is indirection + @P transformation
       const suffix = value[i];
       i++; // Consume the * or @
       operation = {
@@ -122,11 +235,32 @@ function parseParameterExpansion(
       // Clear name so it doesn't get treated as a variable
       name = "";
     } else {
-      operation = { type: "Indirection" };
+      // Simple indirection ${!ref} - but may have inner operation like ${!ref-default}
+      // Check for additional operations after the variable name
+      if (
+        i < value.length &&
+        value[i] !== "}" &&
+        /[:=\-+?#%/^,@]/.test(value[i])
+      ) {
+        const opResult = parseParameterOperation(p, value, i, name, quoted);
+        if (opResult.operation) {
+          // Cast to InnerParameterOperation - parseParameterOperation only returns inner ops
+          operation = {
+            type: "Indirection",
+            innerOp: opResult.operation as InnerParameterOperation,
+          };
+          i = opResult.endIndex;
+        } else {
+          operation = { type: "Indirection" };
+        }
+      } else {
+        operation = { type: "Indirection" };
+      }
     }
   } else if (lengthOp) {
     // ${#var:...} is invalid - you can't take length of a substring
     // ${#var-...} is also invalid - length operator can't be followed by test operators
+    // ${#var/...} is also invalid - length operator can't be followed by transform operators
     if (value[i] === ":") {
       // Mark this as an invalid length+slice operation
       // This will be handled at runtime to throw an error
@@ -138,6 +272,12 @@ function parseParameterExpansion(
     } else if (value[i] !== "}" && /[-+=?]/.test(value[i])) {
       // ${#x-default} etc. are syntax errors in bash
       // length operator cannot be followed by test operators
+      p.error(
+        `\${#${name}${value.slice(i, value.indexOf("}", i))}}: bad substitution`,
+      );
+    } else if (value[i] === "/") {
+      // ${#x/pattern/repl} is a syntax error in bash
+      // length operator cannot be followed by transform operators
       p.error(
         `\${#${name}${value.slice(i, value.indexOf("}", i))}}: bad substitution`,
       );
@@ -169,6 +309,15 @@ function parseParameterExpansion(
   // Find closing }
   while (i < value.length && value[i] !== "}") {
     i++;
+  }
+
+  // Check for unterminated expansion (no closing } found)
+  if (i >= value.length) {
+    throw new ParseException(
+      "unexpected EOF while looking for matching '}'",
+      0,
+      0,
+    );
   }
 
   return {
@@ -209,6 +358,9 @@ function parseParameterOperation(
         true, // isAssignment=true for tilde expansion after : in default values
         false,
         quoted,
+        false, // noBraceExpansion
+        false, // regexPattern
+        true, // inParameterExpansion - so \} is treated as escaped }
       );
       const word = AST.word(
         wordParts.length > 0 ? wordParts : [AST.literal("")],
@@ -277,9 +429,12 @@ function parseParameterOperation(
       operation: {
         type: "Substring",
         offset: WordParser.parseArithExprFromString(p, offsetStr),
-        length: lengthStr
-          ? WordParser.parseArithExprFromString(p, lengthStr)
-          : null,
+        // Note: lengthStr can be "" (empty string after second colon like ${a::})
+        // which should be treated as length 0, not "no length specified"
+        length:
+          lengthStr !== null
+            ? WordParser.parseArithExprFromString(p, lengthStr)
+            : null,
       },
       endIndex: wordEnd,
     };
@@ -300,6 +455,9 @@ function parseParameterOperation(
       true, // isAssignment=true for tilde expansion after : in default values
       false,
       quoted,
+      false, // noBraceExpansion
+      false, // regexPattern
+      true, // inParameterExpansion - so \} is treated as escaped }
     );
     const word = AST.word(wordParts.length > 0 ? wordParts : [AST.literal("")]);
 
@@ -369,7 +527,14 @@ function parseParameterOperation(
     }
 
     // Find pattern/replacement separator
-    const patternEnd = WordParser.findPatternEnd(p, value, i);
+    // Special case: if we have an anchor and the next char is / or }, the pattern is empty
+    // This handles ${var/#/replacement} (prepend) and ${var/%/replacement} (append)
+    let patternEnd: number;
+    if (anchor !== null && (value[i] === "/" || value[i] === "}")) {
+      patternEnd = i; // Pattern is empty
+    } else {
+      patternEnd = WordParser.findPatternEnd(p, value, i);
+    }
     const patternStr = value.slice(i, patternEnd);
     // Parse the pattern for variable expansions (e.g., ${var//$pat/repl})
     const patternParts = parseWordParts(p, patternStr, false, false, false);
@@ -429,9 +594,19 @@ function parseParameterOperation(
     };
   }
 
-  // @Q @P @a @A @E @K transformations
-  if (char === "@" && /[QPaAEK]/.test(nextChar)) {
-    const operator = nextChar as "Q" | "P" | "a" | "A" | "E" | "K";
+  // @Q @P @a @A @E @K @k @u @U @L transformations
+  if (char === "@" && /[QPaAEKkuUL]/.test(nextChar)) {
+    const operator = nextChar as
+      | "Q"
+      | "P"
+      | "a"
+      | "A"
+      | "E"
+      | "K"
+      | "k"
+      | "u"
+      | "U"
+      | "L";
     return {
       operation: {
         type: "Transform",
@@ -459,8 +634,14 @@ function parseExpansion(
 
   const char = value[i];
 
-  // $((expr)) - arithmetic expansion
+  // $((expr)) - arithmetic expansion OR $((cmd) ...) - command substitution with nested subshell
+  // We need to check if this is arithmetic (closes with )) or command sub (closes with ) ))
   if (char === "(" && value[i + 1] === "(") {
+    // Check if this should be parsed as a subshell instead of arithmetic
+    if (p.isDollarDparenSubshell(value, start)) {
+      // Parse as command substitution - the $(( should be treated as $( with inner (
+      return p.parseCommandSubstitution(value, start);
+    }
     return p.parseArithmeticExpansion(value, start);
   }
 
@@ -516,12 +697,13 @@ function parseDoubleQuotedContent(p: Parser, value: string): WordPart[] {
   while (i < value.length) {
     const char = value[i];
 
-    // Handle escape sequences - \$ and \` should become $ and `
-    // In bash, "\$HOME" outputs "$HOME" (backslash is consumed by the escape)
+    // Handle escape sequences in double quotes
+    // In bash double quotes, \$ \` \" \\ all have the backslash removed
+    // "\$HOME" outputs "$HOME", "say \"hi\"" outputs 'say "hi"'
     if (char === "\\" && i + 1 < value.length) {
       const next = value[i + 1];
-      // \$ and \` should become $ and ` (prevents expansion, backslash consumed)
-      if (next === "$" || next === "`") {
+      // \$ \` \" \\ have backslash removed, result in just the escaped char
+      if (next === "$" || next === "`" || next === '"' || next === "\\") {
         literal += next; // Add just the escaped character, not the backslash
         i += 2;
         continue;
@@ -638,6 +820,12 @@ export function parseWordParts(
   hereDoc = false,
   /** When true, single quotes are treated as literal characters, not quote delimiters */
   singleQuotesAreLiteral = false,
+  /** When true, brace expansion is disabled (used in [[ ]] conditionals) */
+  noBraceExpansion = false,
+  /** When true, all backslash escapes create Escaped nodes (for regex patterns in [[ =~ ]]) */
+  regexPattern = false,
+  /** When true, \} is treated as escaped } (used in parameter expansion default values) */
+  inParameterExpansion = false,
 ): WordPart[] {
   if (singleQuoted) {
     // Single quotes: no expansion
@@ -649,6 +837,33 @@ export function parseWordParts(
   if (quoted) {
     const innerParts = parseDoubleQuotedContent(p, value);
     return [AST.doubleQuoted(innerParts)];
+  }
+
+  // Check if value is a fully double-quoted string (starts and ends with " with no unescaped " inside)
+  // This handles cases like assignment values where the token isn't marked as quoted
+  // e.g., v="\\" where the value portion is "\"
+  if (
+    value.length >= 2 &&
+    value[0] === '"' &&
+    value[value.length - 1] === '"'
+  ) {
+    const inner = value.slice(1, -1);
+    // Check for unescaped double quotes inside
+    let hasUnescapedQuote = false;
+    for (let j = 0; j < inner.length; j++) {
+      if (inner[j] === '"') {
+        hasUnescapedQuote = true;
+        break;
+      }
+      if (inner[j] === "\\" && j + 1 < inner.length) {
+        j++; // Skip escaped char
+      }
+    }
+    if (!hasUnescapedQuote) {
+      // It's a fully double-quoted string - parse the inner content
+      const innerParts = parseDoubleQuotedContent(p, inner);
+      return [AST.doubleQuoted(innerParts)];
+    }
   }
 
   const parts: WordPart[] = [];
@@ -669,17 +884,48 @@ export function parseWordParts(
     // In unquoted context, only certain characters are escapable
     // In here-docs, only $, `, \, newline are escapable (NOT ")
     // In regular words, $, `, \, ", newline are escapable
+    // Glob metacharacters (*, ?, [, ]) when escaped should create Escaped nodes
+    // so they're treated as literals during globbing
+    // In regex patterns, ALL escaped characters create Escaped nodes so the backslash
+    // is preserved for the regex engine (e.g., \$ matches literal $)
     if (char === "\\" && i + 1 < value.length) {
       const next = value[i + 1];
+
+      // In regex patterns, all escaped characters create Escaped nodes
+      // This preserves the backslash for the regex engine
+      if (regexPattern) {
+        flushLiteral();
+        parts.push(AST.escaped(next));
+        i += 2;
+        continue;
+      }
+
+      // Characters that should be escaped (result in just the literal char)
+      // Inside parameter expansion default values, \} is also escapable to produce }
       const isEscapable = hereDoc
-        ? next === "$" || next === "`" || next === "\\" || next === "\n"
+        ? next === "$" || next === "`" || next === "\n"
         : next === "$" ||
           next === "`" ||
-          next === "\\" ||
           next === '"' ||
-          next === "\n";
+          next === "'" ||
+          next === "\n" ||
+          (inParameterExpansion && next === "}");
+      // Glob metacharacters, extglob operators, braces, and backslash that should create Escaped nodes
+      // so they're treated as literals during globbing (and \\ doesn't escape the next char)
+      // Including ( and ) to prevent \( and \) from being interpreted as extglob operators
+      // Including { and } to prevent \{ and \} from being interpreted as brace expansion
+      // Including regex metacharacters (. ^ +) so they create Escaped nodes for [[ =~ ]] patterns
+      // BUT: inside double quotes (singleQuotesAreLiteral=true), ( ) { } . ^ + are NOT escapable
+      // because double quotes only allow escaping $, `, ", \, and newline
+      const isGlobMetaOrBackslash = singleQuotesAreLiteral
+        ? "*?[]\\".includes(next)
+        : "*?[]\\(){}.^+".includes(next);
       if (isEscapable) {
         literal += next;
+      } else if (isGlobMetaOrBackslash) {
+        // Create an Escaped node for glob metacharacters and backslash
+        flushLiteral();
+        parts.push(AST.escaped(next));
       } else {
         // Keep the backslash for non-special characters
         literal += `\\${next}`;
@@ -765,6 +1011,26 @@ export function parseWordParts(
       }
     }
 
+    // Handle extglob patterns: @(...), *(...), +(...), ?(...), !(...)
+    // These must be checked BEFORE regular glob patterns because * and ? are both
+    // extglob operators and glob characters
+    if (
+      "@*+?!".includes(char) &&
+      i + 1 < value.length &&
+      value[i + 1] === "("
+    ) {
+      // Find the matching closing paren
+      const closeIdx = findExtglobClose(value, i + 1);
+      if (closeIdx !== -1) {
+        flushLiteral();
+        // Include the entire extglob pattern including the operator and parens
+        const pattern = value.slice(i, closeIdx + 1);
+        parts.push({ type: "Glob", pattern });
+        i = closeIdx + 1;
+        continue;
+      }
+    }
+
     // Handle glob patterns
     if (char === "*" || char === "?" || char === "[") {
       flushLiteral();
@@ -774,8 +1040,8 @@ export function parseWordParts(
       continue;
     }
 
-    // Handle brace expansion (but NOT on the RHS of assignments)
-    if (char === "{" && !isAssignment) {
+    // Handle brace expansion (but NOT on the RHS of assignments or in [[ ]] conditionals)
+    if (char === "{" && !isAssignment && !noBraceExpansion) {
       const braceResult = WordParser.tryParseBraceExpansion(
         p,
         value,

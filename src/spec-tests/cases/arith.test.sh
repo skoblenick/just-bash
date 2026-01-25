@@ -135,7 +135,7 @@ echo $(( 24#ag7 ))
 ## END
 
 #### Integer constant validation
-## SKIP: Interactive shell invocation not implemented
+## SKIP (unimplementable): $SH -c invocations produce different validation results
 check() {
   $SH -c "shopt --set strict_arith; echo $1"
   echo status=$?
@@ -395,7 +395,6 @@ echo $(( 0XAA ))
 ## stdout: 170
 
 #### Dynamic var names - result of runtime parse/eval
-## SKIP: Dynamic variable names in arithmetic not implemented
 foo=5
 x=oo
 echo $(( foo + f$x + 1 ))
@@ -421,7 +420,7 @@ echo "should not get here: x=${x:-<unset>}"
 ## BUG dash/mksh/zsh status: 0
 
 #### 64-bit integer doesn't overflow
-## SKIP: JavaScript uses 32-bit signed integers for bitwise operations
+## SKIP (unimplementable): JavaScript uses 32-bit signed integers for bitwise operations
 
 a=$(( 1 << 31 ))
 echo $a
@@ -586,7 +585,6 @@ echo $(( 2**-1 * 5 ))
 ## N-I dash status: 2
 
 #### Comment not allowed in the middle of multiline arithmetic
-## SKIP: Comments in arithmetic expansion not implemented
 echo $((
 1 +
 2 + \
@@ -703,7 +701,6 @@ last=6
 
 
 #### assignment with dynamic var name
-## SKIP: Dynamic variable names in arithmetic not implemented
 foo=bar
 echo $(( x$foo = 42 ))
 echo xbar=$xbar
@@ -713,10 +710,9 @@ xbar=42
 ## END
 
 #### array assignment with dynamic array name
-## SKIP: Dynamic variable names in arithmetic not implemented
 foo=bar
 echo $(( x$foo[5] = 42 ))
-echo 'xbar[5]='${xbar[5]}
+echo "xbar[5]="${xbar[5]}
 ## STDOUT:
 42
 xbar[5]=42
@@ -729,7 +725,6 @@ xbar[5]=
 ## N-I dash stdout-json: ""
 
 #### unary assignment with dynamic var name
-## SKIP: Dynamic variable names in arithmetic not implemented
 foo=bar
 xbar=42
 echo $(( x$foo++ ))
@@ -742,11 +737,10 @@ xbar=43
 ## BUG dash stdout-json: ""
 
 #### unary array assignment with dynamic var name
-## SKIP: Dynamic variable names in arithmetic not implemented
 foo=bar
 xbar[5]=42
 echo $(( x$foo[5]++ ))
-echo 'xbar[5]='${xbar[5]}
+echo "xbar[5]="${xbar[5]}
 ## STDOUT:
 42
 xbar[5]=43
@@ -809,7 +803,6 @@ a=1
 ## BUG zsh status: 1
 
 #### Invalid constant
-## SKIP: Interactive shell invocation not implemented
 
 echo $((a + x42))
 echo status=$?
@@ -893,7 +886,7 @@ echo $((-10 % -3))
 ## END
 
 #### Negative numbers with bit shift
-## SKIP: JavaScript uses 32-bit signed integers for bitwise operations
+## SKIP (unimplementable): JavaScript uses 32-bit signed integers for bitwise operations
 
 echo $(( 5 << 1 ))
 echo $(( 5 << 0 ))

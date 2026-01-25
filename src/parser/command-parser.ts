@@ -14,7 +14,11 @@ import {
 } from "../ast/types.js";
 import { TokenType } from "./lexer.js";
 import type { Parser } from "./parser.js";
-import { REDIRECTION_AFTER_NUMBER, REDIRECTION_TOKENS } from "./types.js";
+import {
+  REDIRECTION_AFTER_FD_VARIABLE,
+  REDIRECTION_AFTER_NUMBER,
+  REDIRECTION_TOKENS,
+} from "./types.js";
 import * as WordParser from "./word-parser.js";
 
 export function isRedirection(p: Parser): boolean {
@@ -32,15 +36,27 @@ export function isRedirection(p: Parser): boolean {
     return REDIRECTION_AFTER_NUMBER.has(nextToken.type);
   }
 
+  // Check for FD variable followed by redirection operator
+  // e.g., {fd}>file allocates an FD and stores it in variable
+  if (t === TokenType.FD_VARIABLE) {
+    const nextToken = p.peek(1);
+    return REDIRECTION_AFTER_FD_VARIABLE.has(nextToken.type);
+  }
+
   return REDIRECTION_TOKENS.has(t);
 }
 
 export function parseRedirection(p: Parser): RedirectionNode {
   let fd: number | null = null;
+  let fdVariable: string | undefined;
 
-  // Parse optional file descriptor
+  // Parse optional file descriptor number
   if (p.check(TokenType.NUMBER)) {
     fd = Number.parseInt(p.advance().value, 10);
+  }
+  // Parse FD variable syntax: {varname}>file
+  else if (p.check(TokenType.FD_VARIABLE)) {
+    fdVariable = p.advance().value;
   }
 
   // Parse operator
@@ -66,7 +82,7 @@ export function parseRedirection(p: Parser): RedirectionNode {
   }
 
   const target = p.parseWord();
-  return AST.redirection(operator, target, fd);
+  return AST.redirection(operator, target, fd, fdVariable);
 }
 
 function parseHeredocStart(
@@ -113,21 +129,30 @@ export function parseSimpleCommand(p: Parser): SimpleCommandNode {
   const args: WordNode[] = [];
   const redirections: RedirectionNode[] = [];
 
-  // Parse prefix assignments
-  while (p.check(TokenType.ASSIGNMENT_WORD)) {
+  // Parse prefix assignments and redirections (they can be interleaved)
+  // e.g., FOO=foo >file BAR=bar cmd
+  while (p.check(TokenType.ASSIGNMENT_WORD) || isRedirection(p)) {
     p.checkIterationLimit();
-    assignments.push(parseAssignment(p));
-  }
-
-  // Parse redirections that may come before command
-  while (isRedirection(p)) {
-    p.checkIterationLimit();
-    redirections.push(parseRedirection(p));
+    if (p.check(TokenType.ASSIGNMENT_WORD)) {
+      assignments.push(parseAssignment(p));
+    } else {
+      redirections.push(parseRedirection(p));
+    }
   }
 
   // Parse command name
   if (p.isWord()) {
     name = p.parseWord();
+  } else if (
+    assignments.length > 0 &&
+    (p.check(TokenType.DBRACK_START) || p.check(TokenType.DPAREN_START))
+  ) {
+    // When we have prefix assignments (e.g., FOO=bar [[ ... ]]), compound command
+    // keywords are NOT recognized as keywords - they're treated as command names.
+    // In bash, this results in "command not found" because [[ and (( are looked up
+    // as regular commands (not special shell keywords).
+    const token = p.advance();
+    name = AST.word([AST.literal(token.value)]);
   }
 
   // Parse arguments and redirections
@@ -143,6 +168,15 @@ export function parseSimpleCommand(p: Parser): SimpleCommandNode {
       redirections.push(parseRedirection(p));
     } else if (p.check(TokenType.RBRACE)) {
       // } can be an argument like "echo }" - parse it as a word
+      const token = p.advance();
+      args.push(p.parseWordFromString(token.value, false, false));
+    } else if (p.check(TokenType.LBRACE)) {
+      // { can be an argument like "type -t {" - parse it as a word
+      const token = p.advance();
+      args.push(p.parseWordFromString(token.value, false, false));
+    } else if (p.check(TokenType.DBRACK_END)) {
+      // ]] can be an argument when [[ is parsed as a regular command
+      // (e.g., FOO=bar [[ foo == foo ]] where [[ is not recognized as keyword)
       const token = p.advance();
       args.push(p.parseWordFromString(token.value, false, false));
     } else if (p.isWord()) {
@@ -279,6 +313,19 @@ function parseAssignment(p: Parser): AssignmentNode {
   return AST.assignment(assignName, wordValue, append, null);
 }
 
+// Tokens that are invalid inside array literals
+const INVALID_ARRAY_TOKENS: Set<TokenType> = new Set([
+  TokenType.AMP, // &
+  TokenType.PIPE, // |
+  TokenType.PIPE_AMP, // |&
+  TokenType.SEMICOLON, // ;
+  TokenType.AND_AND, // &&
+  TokenType.OR_OR, // ||
+  TokenType.DSEMI, // ;;
+  TokenType.SEMI_AND, // ;&
+  TokenType.SEMI_SEMI_AND, // ;;&
+]);
+
 function parseArrayElements(p: Parser): WordNode[] {
   const elements: WordNode[] = [];
   p.skipNewlines();
@@ -287,8 +334,11 @@ function parseArrayElements(p: Parser): WordNode[] {
     p.checkIterationLimit();
     if (p.isWord()) {
       elements.push(p.parseWord());
+    } else if (INVALID_ARRAY_TOKENS.has(p.current().type)) {
+      // Invalid tokens inside array literals - throw syntax error
+      p.error(`syntax error near unexpected token \`${p.current().value}'`);
     } else {
-      // Skip unexpected tokens to prevent infinite loop
+      // Skip other unexpected tokens to prevent infinite loop
       // This handles cases like nested parens: a=( (1 2) )
       p.advance();
     }

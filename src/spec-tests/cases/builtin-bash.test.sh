@@ -26,7 +26,6 @@ grep=0
 ## END
 
 #### mapfile
-## SKIP: mapfile/readarray not implemented
 type mapfile >/dev/null 2>&1 || exit 0
 printf '%s\n' {1..5..2} | {
   mapfile
@@ -46,7 +45,6 @@ n=3
 ## END
 
 #### readarray (synonym for mapfile)
-## SKIP: mapfile/readarray not implemented
 type readarray >/dev/null 2>&1 || exit 0
 printf '%s\n' {1..5..2} | {
   readarray
@@ -66,7 +64,6 @@ n=3
 ## END
 
 #### mapfile (array name): arr
-## SKIP: mapfile/readarray not implemented
 type mapfile >/dev/null 2>&1 || exit 0
 printf '%s\n' {1..5..2} | {
   mapfile arr
@@ -86,7 +83,6 @@ n=3
 ## END
 
 #### mapfile (delimiter): -d delim
-## SKIP: mapfile/readarray not implemented
 # Note: Bash-4.4+
 type mapfile >/dev/null 2>&1 || exit 0
 printf '%s:' {1..5..2} | {
@@ -104,7 +100,6 @@ n=3
 ## END
 
 #### mapfile (delimiter): -d '' (null-separated)
-## SKIP: mapfile/readarray not implemented
 # Note: Bash-4.4+
 type mapfile >/dev/null 2>&1 || exit 0
 printf '%s\0' {1..5..2} | {
@@ -122,7 +117,6 @@ n=3
 ## END
 
 #### mapfile (truncate delim): -t
-## SKIP: mapfile/readarray not implemented
 type mapfile >/dev/null 2>&1 || exit 0
 printf '%s\n' {1..5..2} | {
   mapfile -t arr
@@ -139,7 +133,6 @@ n=3
 ## END
 
 #### mapfile -t doesn't remove \r
-## SKIP: mapfile/readarray not implemented
 type mapfile >/dev/null 2>&1 || exit 0
 printf '%s\r\n' {1..5..2} | {
   mapfile -t arr
@@ -152,7 +145,6 @@ printf '%s\r\n' {1..5..2} | {
 ## END
 
 #### mapfile -t bugs (ble.sh)
-## SKIP: mapfile/readarray not implemented
 
 # empty line
 mapfile -t lines <<< $'hello\n\nworld'
@@ -176,7 +168,6 @@ len=2
 ## END
 
 #### mapfile (store position): -O start
-## SKIP: mapfile/readarray not implemented
 type mapfile >/dev/null 2>&1 || exit 0
 printf '%s\n' a{0..2} | {
   arr=(x y z)
@@ -196,7 +187,6 @@ n=5
 ## END
 
 #### mapfile (input range): -s start -n count
-## SKIP: mapfile/readarray not implemented
 type mapfile >/dev/null 2>&1 || exit 0
 printf '%s\n' a{0..10} | {
   mapfile -s 5 -n 3 -t arr
@@ -213,7 +203,6 @@ n=3
 ## END
 
 #### mapfile / readarray stdin  TODO: Fix me.
-## SKIP: mapfile/readarray not implemented
 shopt -s lastpipe  # for bash
 
 seq 2 | mapfile m

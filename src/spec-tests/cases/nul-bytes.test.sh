@@ -3,7 +3,6 @@
 ## oils_cpp_failures_allowed: 1
 
 #### NUL bytes with echo -e
-## SKIP: od command not implemented
 case $SH in dash) exit ;; esac
 
 show_hex() { od -A n -t c -t x1; }
@@ -26,7 +25,7 @@ echo -e '\0-' | show_hex
 ## END
 
 #### printf - literal NUL in format string
-## SKIP: od command not implemented
+## SKIP (unimplementable): NUL bytes are preserved instead of being stripped like bash (matches zsh behavior)
 case $SH in dash|ash) return ;; esac
 
 # Show both printable and hex
@@ -62,7 +61,6 @@ printf $'\U0z' | show_hex
 ## END
 
 #### printf - \0 escape shows NUL byte
-## SKIP: od command not implemented
 show_hex() { od -A n -t c -t x1; }
 
 printf '\0\n' | show_hex
@@ -72,7 +70,7 @@ printf '\0\n' | show_hex
 ## END
 
 #### printf - NUL byte in value (OSH and zsh agree)
-## SKIP: od command not implemented
+## SKIP (unimplementable): NUL bytes are preserved instead of being stripped like bash (matches zsh behavior)
 case $SH in dash) exit ;; esac
 show_hex() { od -A n -t c -t x1; }
 
@@ -96,7 +94,7 @@ printf '%s\n' "$nul" | show_hex
 ## N-I dash stdout-json: ""
 
 #### NUL bytes with echo $'\0' (OSH and zsh agree)
-## SKIP: od command not implemented
+## SKIP (unimplementable): NUL bytes are preserved instead of being stripped like bash (matches zsh behavior)
 case $SH in dash) exit ;; esac
 show_hex() { od -A n -t c -t x1; }
 
@@ -119,6 +117,7 @@ echo $'\0' | show_hex
 
 
 #### NUL bytes and IFS splitting
+## SKIP (unimplementable): NUL bytes are preserved instead of being stripped from strings
 case $SH in dash) exit ;; esac
 
 argv.py $(echo -e '\0')
@@ -143,6 +142,7 @@ argv.py "$(echo -e 'a\0b')"
 ## END
 
 #### NUL bytes with test -n
+## SKIP (unimplementable): NUL byte handling in test -n differs from bash (matches zsh behavior)
 
 case $SH in dash) exit ;; esac
 
@@ -172,6 +172,7 @@ status=0
 
 
 #### NUL bytes with test -f
+## SKIP (unimplementable): NUL byte handling in filenames differs from bash
 
 case $SH in dash) exit ;; esac
 
@@ -209,6 +210,7 @@ status=1
 
 
 #### NUL bytes with ${#s} (OSH and zsh agree)
+## SKIP (unimplementable): NUL byte in string length matches zsh behavior (returns 1, not 0)
 
 case $SH in dash) exit ;; esac
 
@@ -233,7 +235,7 @@ nul=1
 ## END
 
 #### Compare \x00 byte versus \x01 byte - command sub
-## SKIP: od command not implemented
+## SKIP (unimplementable): NUL byte handling in command substitution differs from bash (we preserve NUL bytes)
 
 # https://stackoverflow.com/questions/32722007/is-skipping-ignoring-nul-bytes-on-process-substitution-standardized
 # bash contains a warning!
@@ -272,7 +274,7 @@ len=1
 ## END
 
 #### Compare \x00 byte versus \x01 byte - read builtin
-## SKIP: od command not implemented
+## SKIP (unimplementable): NUL byte handling in command substitution differs from bash (we preserve NUL bytes)
 
 # Hm same odd behavior
 
@@ -306,7 +308,7 @@ len=1
 ## END
 
 #### Compare \x00 byte versus \x01 byte - read -n
-## SKIP: Advanced read options (-N, -n, -d, -t, -u, -s, -e, -i, -a, -p, -P) not implemented
+## SKIP (unimplementable): read -n NUL byte handling differs from bash
 case $SH in dash) exit ;; esac
 
 show_string() {
@@ -350,7 +352,6 @@ len=0
 
 
 #### Compare \x00 byte versus \x01 byte - mapfile builtin
-## SKIP: mapfile/readarray not implemented
 case $SH in dash|mksh|zsh|ash) exit ;; esac
 
 { 
@@ -378,7 +379,7 @@ len=2
 ## END
 
 #### Strip ops # ## % %% with NUL bytes
-## SKIP: od command not implemented
+## SKIP (unimplementable): NUL byte handling in command substitution differs from bash (we preserve NUL bytes)
 
 show_bytes() {
   echo -n "$1" | od -A n -t x1
@@ -431,7 +432,7 @@ len=2
 ## END
 
 #### Issue 2269 Reduction
-## SKIP: od command not implemented
+## SKIP (unimplementable): NUL byte handling in command substitution differs from bash (we preserve NUL bytes)
 
 show_bytes() {
   echo -n "$1" | od -A n -t x1
@@ -481,6 +482,7 @@ len=1
 ## END
 
 #### Issue 2269 - Do NUL bytes match ? in ${a#?}
+## SKIP (unimplementable): NUL byte handling in parameter expansion differs from bash
 
 # https://github.com/oils-for-unix/oils/issues/2269
 

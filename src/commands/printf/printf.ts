@@ -4,6 +4,123 @@ import type { Command, CommandContext, ExecResult } from "../../types.js";
 import { hasHelpFlag, showHelp } from "../help.js";
 import { applyWidth, processEscapes } from "./escapes.js";
 
+/**
+ * Decode a byte array as UTF-8 with error recovery.
+ * Valid UTF-8 sequences are decoded to their Unicode characters.
+ * Invalid bytes are preserved as Latin-1 characters (byte value = char code).
+ */
+function decodeUtf8WithRecovery(bytes: number[]): string {
+  let result = "";
+  let i = 0;
+
+  while (i < bytes.length) {
+    const b0 = bytes[i];
+
+    // ASCII (0xxxxxxx)
+    if (b0 < 0x80) {
+      result += String.fromCharCode(b0);
+      i++;
+      continue;
+    }
+
+    // 2-byte sequence (110xxxxx 10xxxxxx)
+    if ((b0 & 0xe0) === 0xc0) {
+      if (
+        i + 1 < bytes.length &&
+        (bytes[i + 1] & 0xc0) === 0x80 &&
+        b0 >= 0xc2 // Reject overlong sequences
+      ) {
+        const codePoint = ((b0 & 0x1f) << 6) | (bytes[i + 1] & 0x3f);
+        result += String.fromCharCode(codePoint);
+        i += 2;
+        continue;
+      }
+      // Invalid or incomplete - output as Latin-1
+      result += String.fromCharCode(b0);
+      i++;
+      continue;
+    }
+
+    // 3-byte sequence (1110xxxx 10xxxxxx 10xxxxxx)
+    if ((b0 & 0xf0) === 0xe0) {
+      if (
+        i + 2 < bytes.length &&
+        (bytes[i + 1] & 0xc0) === 0x80 &&
+        (bytes[i + 2] & 0xc0) === 0x80
+      ) {
+        // Check for overlong encoding
+        if (b0 === 0xe0 && bytes[i + 1] < 0xa0) {
+          // Overlong - output first byte as Latin-1
+          result += String.fromCharCode(b0);
+          i++;
+          continue;
+        }
+        // Check for surrogate range (U+D800-U+DFFF)
+        const codePoint =
+          ((b0 & 0x0f) << 12) |
+          ((bytes[i + 1] & 0x3f) << 6) |
+          (bytes[i + 2] & 0x3f);
+        if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
+          // Invalid surrogate - output first byte as Latin-1
+          result += String.fromCharCode(b0);
+          i++;
+          continue;
+        }
+        result += String.fromCharCode(codePoint);
+        i += 3;
+        continue;
+      }
+      // Invalid or incomplete - output as Latin-1
+      result += String.fromCharCode(b0);
+      i++;
+      continue;
+    }
+
+    // 4-byte sequence (11110xxx 10xxxxxx 10xxxxxx 10xxxxxx)
+    if ((b0 & 0xf8) === 0xf0 && b0 <= 0xf4) {
+      if (
+        i + 3 < bytes.length &&
+        (bytes[i + 1] & 0xc0) === 0x80 &&
+        (bytes[i + 2] & 0xc0) === 0x80 &&
+        (bytes[i + 3] & 0xc0) === 0x80
+      ) {
+        // Check for overlong encoding
+        if (b0 === 0xf0 && bytes[i + 1] < 0x90) {
+          // Overlong - output first byte as Latin-1
+          result += String.fromCharCode(b0);
+          i++;
+          continue;
+        }
+        const codePoint =
+          ((b0 & 0x07) << 18) |
+          ((bytes[i + 1] & 0x3f) << 12) |
+          ((bytes[i + 2] & 0x3f) << 6) |
+          (bytes[i + 3] & 0x3f);
+        // Check for valid range (U+10000 to U+10FFFF)
+        if (codePoint > 0x10ffff) {
+          // Invalid - output first byte as Latin-1
+          result += String.fromCharCode(b0);
+          i++;
+          continue;
+        }
+        result += String.fromCodePoint(codePoint);
+        i += 4;
+        continue;
+      }
+      // Invalid or incomplete - output as Latin-1
+      result += String.fromCharCode(b0);
+      i++;
+      continue;
+    }
+
+    // Invalid lead byte (10xxxxxx or 11111xxx) - output as Latin-1
+    result += String.fromCharCode(b0);
+    i++;
+  }
+
+  return result;
+}
+
 const printfHelp = {
   name: "printf",
   summary: "format and print data",
@@ -96,11 +213,15 @@ export const printfCommand: Command = {
       let hadError = false;
       let errorMessage = "";
 
+      // Get TZ from shell environment for strftime formatting
+      const tz = ctx.env.TZ;
+
       do {
         const { result, argsConsumed, error, errMsg, stopped } = formatOnce(
           processedFormat,
           formatArgs,
           argPos,
+          tz,
         );
         output += result;
         argPos += argsConsumed;
@@ -121,7 +242,21 @@ export const printfCommand: Command = {
 
       // If -v was specified, store in variable instead of printing
       if (targetVar) {
-        ctx.env[targetVar] = output;
+        // Check for array subscript syntax: name[key] or name["key"] or name['key']
+        const arrayMatch = targetVar.match(
+          /^([a-zA-Z_][a-zA-Z0-9_]*)\[(['"]?)(.+?)\2\]$/,
+        );
+        if (arrayMatch) {
+          const arrayName = arrayMatch[1];
+          let key = arrayMatch[3];
+          // Expand variables in the subscript (e.g., $key -> value)
+          key = key.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (_, varName) => {
+            return ctx.env[varName] ?? "";
+          });
+          ctx.env[`${arrayName}_${key}`] = output;
+        } else {
+          ctx.env[targetVar] = output;
+        }
         return { stdout: "", stderr: errorMessage, exitCode: hadError ? 1 : 0 };
       }
 
@@ -148,6 +283,7 @@ function formatOnce(
   format: string,
   args: string[],
   argPos: number,
+  tz?: string,
 ): {
   result: string;
   argsConsumed: number;
@@ -171,6 +307,61 @@ function formatOnce(
       if (format[i] === "%") {
         result += "%";
         i++;
+        continue;
+      }
+
+      // Check for %(strftime)T format
+      // Format: %[flags][width][.precision](strftime-format)T
+      const strftimeMatch = format
+        .slice(specStart)
+        .match(/^%(-?\d*)(?:\.(\d+))?\(([^)]*)\)T/);
+      if (strftimeMatch) {
+        const width = strftimeMatch[1] ? parseInt(strftimeMatch[1], 10) : 0;
+        const precision = strftimeMatch[2]
+          ? parseInt(strftimeMatch[2], 10)
+          : -1;
+        const strftimeFmt = strftimeMatch[3];
+        const fullMatch = strftimeMatch[0];
+
+        // Get the timestamp argument
+        const arg = args[argPos + argsConsumed] || "";
+        argsConsumed++;
+
+        // Parse timestamp - empty or -1 means current time, -2 means shell start time
+        let timestamp: number;
+        if (arg === "" || arg === "-1") {
+          timestamp = Math.floor(Date.now() / 1000);
+        } else if (arg === "-2") {
+          // Shell start time - use current time as approximation
+          timestamp = Math.floor(Date.now() / 1000);
+        } else {
+          timestamp = parseInt(arg, 10) || 0;
+        }
+
+        // Format using strftime
+        let formatted = formatStrftime(strftimeFmt, timestamp, tz);
+
+        // Apply precision (truncate)
+        if (precision >= 0 && formatted.length > precision) {
+          formatted = formatted.slice(0, precision);
+        }
+
+        // Apply width
+        if (width !== 0) {
+          const absWidth = Math.abs(width);
+          if (formatted.length < absWidth) {
+            if (width < 0) {
+              // Left-justify
+              formatted = formatted.padEnd(absWidth, " ");
+            } else {
+              // Right-justify
+              formatted = formatted.padStart(absWidth, " ");
+            }
+          }
+        }
+
+        result += formatted;
+        i = specStart + fullMatch.length;
         continue;
       }
 
@@ -318,9 +509,23 @@ function formatValue(
         parseErrMsg: "",
       };
     }
-    case "c":
-      // Character - take first char
-      return { value: arg.charAt(0) || "", parseError: false, parseErrMsg: "" };
+    case "c": {
+      // Character - take first BYTE of UTF-8 encoding (not first Unicode character)
+      // This matches bash behavior where %c outputs a single byte, not a full character
+      if (arg === "") {
+        return { value: "", parseError: false, parseErrMsg: "" };
+      }
+      // Encode the string to UTF-8 and take just the first byte
+      const encoder = new TextEncoder();
+      const bytes = encoder.encode(arg);
+      const firstByte = bytes[0];
+      // Convert byte back to a character (as Latin-1 / ISO-8859-1)
+      return {
+        value: String.fromCharCode(firstByte),
+        parseError: false,
+        parseErrMsg: "",
+      };
+    }
     case "s":
       return {
         value: formatString(spec, arg),
@@ -584,8 +789,9 @@ function shellQuote(str: string): string {
     return str;
   }
 
-  // Check if we need $'...' syntax (for control chars, newlines, etc.)
-  const needsDollarQuote = /[\x00-\x1f\x7f]/.test(str);
+  // Check if we need $'...' syntax (for control chars, newlines, high bytes, etc.)
+  // High bytes (0x80-0xff) need escaping as they are not printable ASCII
+  const needsDollarQuote = /[\x00-\x1f\x7f-\xff]/.test(str);
 
   if (needsDollarQuote) {
     // Use $'...' format with escape sequences for control characters
@@ -612,8 +818,10 @@ function shellQuote(str: string): string {
         result += "\\v";
       } else if (char === "\x1b") {
         result += "\\E";
-      } else if (code < 32 || code > 126) {
-        result += `\\x${code.toString(16).padStart(2, "0")}`;
+      } else if (code < 32 || (code >= 127 && code <= 255)) {
+        // Use octal escapes like bash does for control chars and high bytes (0x80-0xFF)
+        // Valid Unicode chars (code > 255) are left unescaped
+        result += `\\${code.toString(8).padStart(3, "0")}`;
       } else if (char === '"') {
         result += '\\"';
       } else {
@@ -809,14 +1017,27 @@ function processBEscapes(str: string): { value: string; stopped: boolean } {
           return { value: result, stopped: true };
         case "x": {
           // \xHH - hex escape (1-2 hex digits)
-          let hex = "";
-          let j = i + 2;
-          while (j < str.length && j < i + 4 && /[0-9a-fA-F]/.test(str[j])) {
-            hex += str[j];
-            j++;
+          // Collect consecutive \xHH escapes and decode as UTF-8 with error recovery
+          const bytes: number[] = [];
+          let j = i;
+          while (j + 1 < str.length && str[j] === "\\" && str[j + 1] === "x") {
+            let hex = "";
+            let k = j + 2;
+            while (k < str.length && k < j + 4 && /[0-9a-fA-F]/.test(str[k])) {
+              hex += str[k];
+              k++;
+            }
+            if (hex) {
+              bytes.push(parseInt(hex, 16));
+              j = k;
+            } else {
+              break;
+            }
           }
-          if (hex) {
-            result += String.fromCharCode(parseInt(hex, 16));
+
+          if (bytes.length > 0) {
+            // Decode bytes as UTF-8 with error recovery
+            result += decodeUtf8WithRecovery(bytes);
             i = j;
           } else {
             result += "\\x";
@@ -887,4 +1108,411 @@ function processBEscapes(str: string): { value: string; stopped: boolean } {
   }
 
   return { value: result, stopped: false };
+}
+
+/**
+ * Format a Unix timestamp using strftime-like format directives.
+ * Uses the provided timezone if set, otherwise uses system default.
+ */
+function formatStrftime(
+  format: string,
+  timestamp: number,
+  tz?: string,
+): string {
+  const date = new Date(timestamp * 1000);
+
+  // Build result by replacing format directives
+  let result = "";
+  let i = 0;
+
+  while (i < format.length) {
+    if (format[i] === "%" && i + 1 < format.length) {
+      const directive = format[i + 1];
+      const formatted = formatStrftimeDirective(date, directive, tz);
+      if (formatted !== null) {
+        result += formatted;
+        i += 2;
+      } else {
+        // Unknown directive, keep as-is
+        result += format[i];
+        i++;
+      }
+    } else {
+      result += format[i];
+      i++;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Get date/time parts in a specific timezone using Intl.DateTimeFormat.
+ * Returns an object with year, month, day, hour, minute, second, weekday.
+ */
+function getDatePartsInTimezone(
+  date: Date,
+  tz?: string,
+): {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+  weekday: number;
+} {
+  const options: Intl.DateTimeFormatOptions = {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    weekday: "short",
+    hour12: false,
+    timeZone: tz,
+  };
+
+  try {
+    const formatter = new Intl.DateTimeFormat("en-US", options);
+    const parts = formatter.formatToParts(date);
+
+    const getValue = (type: string) =>
+      parts.find((p) => p.type === type)?.value || "";
+
+    const year = parseInt(getValue("year"), 10);
+    const month = parseInt(getValue("month"), 10);
+    const day = parseInt(getValue("day"), 10);
+    let hour = parseInt(getValue("hour"), 10);
+    // Handle edge case where hour12: false still shows 24 as 00
+    if (hour === 24) hour = 0;
+    const minute = parseInt(getValue("minute"), 10);
+    const second = parseInt(getValue("second"), 10);
+
+    // Convert weekday name to number (0-6, Sunday=0)
+    const weekdayName = getValue("weekday");
+    const weekdayMap: Record<string, number> = {
+      Sun: 0,
+      Mon: 1,
+      Tue: 2,
+      Wed: 3,
+      Thu: 4,
+      Fri: 5,
+      Sat: 6,
+    };
+    const weekday = weekdayMap[weekdayName] ?? date.getDay();
+
+    return { year, month, day, hour, minute, second, weekday };
+  } catch {
+    // Fallback to local time if timezone is invalid
+    return {
+      year: date.getFullYear(),
+      month: date.getMonth() + 1,
+      day: date.getDate(),
+      hour: date.getHours(),
+      minute: date.getMinutes(),
+      second: date.getSeconds(),
+      weekday: date.getDay(),
+    };
+  }
+}
+
+/**
+ * Format a single strftime directive.
+ * Returns null for unknown directives.
+ */
+function formatStrftimeDirective(
+  date: Date,
+  directive: string,
+  tz?: string,
+): string | null {
+  const pad2 = (n: number) => String(n).padStart(2, "0");
+  const pad3 = (n: number) => String(n).padStart(3, "0");
+
+  // Get date parts in the specified timezone
+  const parts = getDatePartsInTimezone(date, tz);
+
+  switch (directive) {
+    // Date components
+    case "Y": // Full year (e.g., 2019)
+      return String(parts.year);
+    case "y": // Year without century (00-99)
+      return pad2(parts.year % 100);
+    case "C": // Century (e.g., 20)
+      return String(Math.floor(parts.year / 100));
+    case "m": // Month (01-12)
+      return pad2(parts.month);
+    case "d": // Day of month (01-31)
+      return pad2(parts.day);
+    case "e": // Day of month, space-padded ( 1-31)
+      return String(parts.day).padStart(2, " ");
+    case "j": // Day of year (001-366)
+      return pad3(getDayOfYearForParts(parts.year, parts.month, parts.day));
+
+    // Time components
+    case "H": // Hour (00-23)
+      return pad2(parts.hour);
+    case "I": // Hour (01-12)
+      return pad2(((parts.hour + 11) % 12) + 1);
+    case "M": // Minute (00-59)
+      return pad2(parts.minute);
+    case "S": // Second (00-59)
+      return pad2(parts.second);
+    case "p": // AM/PM
+      return parts.hour < 12 ? "AM" : "PM";
+    case "P": // am/pm
+      return parts.hour < 12 ? "am" : "pm";
+
+    // Weekday
+    case "A": // Full weekday name
+      return [
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+      ][parts.weekday];
+    case "a": // Abbreviated weekday name
+      return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][parts.weekday];
+    case "u": // Day of week (1-7, Monday=1)
+      return String(parts.weekday === 0 ? 7 : parts.weekday);
+    case "w": // Day of week (0-6, Sunday=0)
+      return String(parts.weekday);
+
+    // Month names
+    case "B": // Full month name
+      return [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+      ][parts.month - 1];
+    case "b": // Abbreviated month name
+    case "h": // Same as %b
+      return [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+      ][parts.month - 1];
+
+    // Week number
+    case "U": // Week number (Sunday as first day, 00-53)
+      return pad2(getWeekNumberForParts(parts.year, parts.month, parts.day, 0));
+    case "W": // Week number (Monday as first day, 00-53)
+      return pad2(getWeekNumberForParts(parts.year, parts.month, parts.day, 1));
+    case "V": // ISO week number (01-53)
+      return pad2(getISOWeekNumberForParts(parts.year, parts.month, parts.day));
+
+    // Combined formats
+    case "D": // %m/%d/%y
+      return `${pad2(parts.month)}/${pad2(parts.day)}/${pad2(parts.year % 100)}`;
+    case "F": // %Y-%m-%d
+      return `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}`;
+    case "T": // %H:%M:%S
+      return `${pad2(parts.hour)}:${pad2(parts.minute)}:${pad2(parts.second)}`;
+    case "R": // %H:%M
+      return `${pad2(parts.hour)}:${pad2(parts.minute)}`;
+    case "r": // %I:%M:%S %p
+      return `${pad2(((parts.hour + 11) % 12) + 1)}:${pad2(parts.minute)}:${pad2(parts.second)} ${parts.hour < 12 ? "AM" : "PM"}`;
+
+    // Timezone
+    case "z": // Timezone offset (+/-HHMM)
+      return getTimezoneOffset(date, tz);
+    case "Z": // Timezone name
+      return getTimezoneName(date, tz);
+
+    // Misc
+    case "n": // Newline
+      return "\n";
+    case "t": // Tab
+      return "\t";
+    case "%": // Literal %
+      return "%";
+    case "s": // Unix timestamp
+      return String(Math.floor(date.getTime() / 1000));
+
+    default:
+      return null;
+  }
+}
+
+/**
+ * Get timezone offset string (+/-HHMM) for a specific timezone.
+ */
+function getTimezoneOffset(date: Date, tz?: string): string {
+  const pad2 = (n: number) => String(n).padStart(2, "0");
+
+  if (!tz) {
+    const offset = -date.getTimezoneOffset();
+    const sign = offset >= 0 ? "+" : "-";
+    const hours = Math.floor(Math.abs(offset) / 60);
+    const mins = Math.abs(offset) % 60;
+    return `${sign}${pad2(hours)}${pad2(mins)}`;
+  }
+
+  try {
+    // Get offset by comparing UTC time with timezone time
+    const utcFormatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    const tzFormatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+
+    const utcParts = utcFormatter.formatToParts(date);
+    const tzParts = tzFormatter.formatToParts(date);
+
+    const getVal = (parts: Intl.DateTimeFormatPart[], type: string): number => {
+      let val = parseInt(parts.find((p) => p.type === type)?.value || "0", 10);
+      if (type === "hour" && val === 24) val = 0;
+      return val;
+    };
+
+    const utcMins =
+      getVal(utcParts, "day") * 24 * 60 +
+      getVal(utcParts, "hour") * 60 +
+      getVal(utcParts, "minute");
+    const tzMins =
+      getVal(tzParts, "day") * 24 * 60 +
+      getVal(tzParts, "hour") * 60 +
+      getVal(tzParts, "minute");
+
+    let offset = tzMins - utcMins;
+    // Handle day boundary wrap
+    if (offset > 12 * 60) offset -= 24 * 60;
+    if (offset < -12 * 60) offset += 24 * 60;
+
+    const sign = offset >= 0 ? "+" : "-";
+    const hours = Math.floor(Math.abs(offset) / 60);
+    const mins = Math.abs(offset) % 60;
+    return `${sign}${pad2(hours)}${pad2(mins)}`;
+  } catch {
+    // Fallback
+    const offset = -date.getTimezoneOffset();
+    const sign = offset >= 0 ? "+" : "-";
+    const hours = Math.floor(Math.abs(offset) / 60);
+    const mins = Math.abs(offset) % 60;
+    return `${sign}${pad2(hours)}${pad2(mins)}`;
+  }
+}
+
+/**
+ * Get timezone name for a specific timezone.
+ */
+function getTimezoneName(date: Date, tz?: string): string {
+  try {
+    const options: Intl.DateTimeFormatOptions = {
+      timeZoneName: "short",
+      timeZone: tz,
+    };
+    return date.toLocaleTimeString("en-US", options).split(" ").pop() || "";
+  } catch {
+    return (
+      date
+        .toLocaleTimeString("en-US", { timeZoneName: "short" })
+        .split(" ")
+        .pop() || ""
+    );
+  }
+}
+
+/**
+ * Get day of year (1-366) from year/month/day parts.
+ */
+function getDayOfYearForParts(
+  year: number,
+  month: number,
+  day: number,
+): number {
+  // Days in each month (non-leap year)
+  const daysInMonth = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+  // Check for leap year
+  const isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  if (isLeap) daysInMonth[2] = 29;
+
+  let dayOfYear = day;
+  for (let m = 1; m < month; m++) {
+    dayOfYear += daysInMonth[m];
+  }
+  return dayOfYear;
+}
+
+/**
+ * Get week number (0-53) from year/month/day parts.
+ * @param firstDay - 0 for Sunday, 1 for Monday
+ */
+function getWeekNumberForParts(
+  year: number,
+  month: number,
+  day: number,
+  firstDay: number,
+): number {
+  // Get day of week for Jan 1
+  const jan1 = new Date(year, 0, 1);
+  const yearStartDay = jan1.getDay();
+  const dayOfYear = getDayOfYearForParts(year, month, day);
+
+  // Adjust for first day of week
+  const daysBeforeFirstWeek = (7 + yearStartDay - firstDay) % 7;
+  if (dayOfYear <= daysBeforeFirstWeek) {
+    return 0;
+  }
+  return Math.floor((dayOfYear - 1 - daysBeforeFirstWeek) / 7) + 1;
+}
+
+/**
+ * Get ISO week number (1-53) from year/month/day parts.
+ * Week 1 is the week containing January 4th
+ */
+function getISOWeekNumberForParts(
+  year: number,
+  month: number,
+  day: number,
+): number {
+  // Create a date object for calculations
+  const tempDate = new Date(year, month - 1, day);
+  tempDate.setHours(0, 0, 0, 0);
+  // Set to Thursday in current week (ISO weeks start on Monday)
+  tempDate.setDate(tempDate.getDate() + 3 - ((tempDate.getDay() + 6) % 7));
+  // Get first Thursday of year
+  const firstThursday = new Date(tempDate.getFullYear(), 0, 4);
+  firstThursday.setDate(
+    firstThursday.getDate() + 3 - ((firstThursday.getDay() + 6) % 7),
+  );
+  // Calculate week number
+  const diff = tempDate.getTime() - firstThursday.getTime();
+  return 1 + Math.round(diff / (7 * 24 * 60 * 60 * 1000));
 }

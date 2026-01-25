@@ -31,7 +31,6 @@ echo ${unset-is unset}
 ## stdout: is unset
 
 #### Unquoted with array as default value
-## SKIP: argv.py test helper not available
 set -- '1 2' '3 4'
 argv.py X${unset=x"$@"x}X
 argv.py X${unset=x$@x}X  # If you want OSH to split, write this
@@ -71,7 +70,6 @@ argv.py "X${unset=x$@x}X"  # OSH is the same here
 ## END
 
 #### Assign default with array
-## SKIP: argv.py test helper not available
 set -- '1 2' '3 4'
 argv.py X${unset=x"$@"x}X
 argv.py "$unset"
@@ -263,7 +261,6 @@ echo
 
 
 #### Nix idiom ${!hooksSlice+"${!hooksSlice}"} - was workaround for obsolete bash 4.3 bug
-## SKIP: argv.py test helper not available
 
 case $SH in dash|mksh|zsh) exit ;; esac
 
@@ -289,17 +286,9 @@ argv.py ${!hooksSlice+"${!hooksSlice}"}
 ## STDOUT:
 []
 []
+[]
 ['42']
 ## END
-
-# Bash 4.4 has a bug that ${!undef-} successfully generates an empty word.
-#
-# ## BUG bash STDOUT:
-# []
-# []
-# []
-# ['42']
-# ## END
 
 ## OK dash/mksh/zsh STDOUT:
 ## END
@@ -320,7 +309,7 @@ v=foo
 ## END
 
 #### array and - and +
-## SKIP: Right brace in parameter default value not implemented
+## SKIP (unimplementable): shopt compat_array not implemented (OSH-specific), empty string in unquoted array expansion loses space
 case $SH in dash) exit ;; esac
 
 shopt -s compat_array  # to refer to array as scalar
@@ -452,7 +441,6 @@ argv=plus
 ## END
 
 #### $* ("" "") and - and + (IFS=)
-## SKIP: Right brace in parameter default value not implemented
 set -- "" ""
 IFS=
 echo argv=${*-minus}
@@ -473,7 +461,6 @@ argv=
 ## END
 
 #### "$*" ("" "") and - and + (IFS=)
-## SKIP: Bash checks if positional params exist, not if $* expansion is empty
 set -- "" ""
 IFS=
 echo "argv=${*-minus}"
@@ -488,7 +475,6 @@ argv=plus
 ## END
 
 #### assoc array and - and +
-## SKIP: Right brace in parameter default value not implemented
 case $SH in dash|mksh) exit ;; esac
 
 declare -A empty=()
@@ -634,7 +620,6 @@ echo "${undef-\e}"
 
 
 #### op-test for ${a} and ${a[0]}
-## SKIP: Right brace in parameter default value not implemented
 case $SH in dash) exit ;; esac
 
 test-hyphen() {
@@ -680,7 +665,6 @@ a[0]: 'no-colon' 'with-colon'
 
 
 #### op-test for ${a[@]} and ${a[*]}
-## SKIP: Right brace in parameter default value not implemented
 case $SH in dash) exit ;; esac
 
 test-hyphen() {
@@ -741,7 +725,6 @@ a[*]: '' 'with-colon'
 
 
 #### op-test for ${!array} with array="a" and array="a[0]"
-## SKIP: Right brace in parameter default value not implemented
 case $SH in dash|mksh|zsh) exit ;; esac
 
 test-hyphen() {
@@ -776,7 +759,6 @@ ref=a[0]: '' 'with-colon'
 
 
 #### op-test for ${!array} with array="a[@]" or array="a[*]"
-## SKIP: Right brace in parameter default value not implemented
 case $SH in dash|mksh|zsh) exit ;; esac
 
 test-hyphen() {
@@ -822,7 +804,6 @@ ref=a[*]: '' ''
 
 
 #### op-test for unquoted ${a[*]:-empty} with IFS=
-## SKIP: op-test for arrays not implemented
 case $SH in dash) exit ;; esac
 
 IFS=

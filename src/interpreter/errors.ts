@@ -134,9 +134,21 @@ export class ExitError extends ControlFlowError {
 export class ArithmeticError extends ControlFlowError {
   readonly name = "ArithmeticError";
 
-  constructor(message: string, stdout: string = "", stderr: string = "") {
+  /**
+   * If true, this error should abort script execution (like missing operand after binary operator).
+   * If false, the error is recoverable and execution can continue.
+   */
+  public fatal: boolean;
+
+  constructor(
+    message: string,
+    stdout: string = "",
+    stderr: string = "",
+    fatal = false,
+  ) {
     super(message, stdout, stderr);
     this.stderr = stderr || `bash: ${message}\n`;
+    this.fatal = fatal;
   }
 }
 
@@ -150,6 +162,32 @@ export class BadSubstitutionError extends ControlFlowError {
   constructor(message: string, stdout: string = "", stderr: string = "") {
     super(message, stdout, stderr);
     this.stderr = stderr || `bash: ${message}: bad substitution\n`;
+  }
+}
+
+/**
+ * Error thrown when failglob is enabled and a glob pattern has no matches.
+ * Returns exit code 1.
+ */
+export class GlobError extends ControlFlowError {
+  readonly name = "GlobError";
+
+  constructor(pattern: string, stdout: string = "", stderr: string = "") {
+    super(`no match: ${pattern}`, stdout, stderr);
+    this.stderr = stderr || `bash: no match: ${pattern}\n`;
+  }
+}
+
+/**
+ * Error thrown for invalid brace expansions (e.g., mixed case character ranges like {z..A}).
+ * Returns exit code 1 (matching bash behavior).
+ */
+export class BraceExpansionError extends ControlFlowError {
+  readonly name = "BraceExpansionError";
+
+  constructor(message: string, stdout: string = "", stderr: string = "") {
+    super(message, stdout, stderr);
+    this.stderr = stderr || `bash: ${message}\n`;
   }
 }
 
@@ -197,4 +235,25 @@ export function isScopeExitError(
     error instanceof ContinueError ||
     error instanceof ReturnError
   );
+}
+
+/**
+ * Error thrown when a POSIX special builtin fails in POSIX mode.
+ * In POSIX mode (set -o posix), errors in special builtins like
+ * shift, set, readonly, export, etc. cause the entire script to exit.
+ *
+ * Per POSIX 2.8.1 - Consequences of Shell Errors:
+ * "A special built-in utility causes an interactive or non-interactive shell
+ * to exit when an error occurs."
+ */
+export class PosixFatalError extends ControlFlowError {
+  readonly name = "PosixFatalError";
+
+  constructor(
+    public readonly exitCode: number,
+    stdout: string = "",
+    stderr: string = "",
+  ) {
+    super("posix fatal error", stdout, stderr);
+  }
 }

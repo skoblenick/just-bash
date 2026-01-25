@@ -71,7 +71,6 @@ argv.py 1 "$@" 2 $@ 3 "$*" 4 $* 5
 ## stdout: ['1', '2', '3', '', '4', '5']
 
 #### $* with empty IFS
-## SKIP: Empty IFS with unquoted $* keeps params separate in bash
 set -- "1 2" "3  4"
 
 IFS=
@@ -89,7 +88,6 @@ argv.py $s1
 ## stdout: []
 
 #### Word elision with non-whitespace IFS
-## SKIP: Word elision with non-whitespace IFS not implemented
 # Treated differently than the default IFS.  What is the rule here?
 IFS='_'
 char='_'
@@ -110,7 +108,6 @@ argv.py $empty
 ## END
 
 #### Leading/trailing word elision with non-whitespace IFS
-## SKIP: Leading/trailing IFS handling not implemented
 # This behavior is weird.
 IFS=_
 s1='_a_b_'
@@ -118,7 +115,6 @@ argv.py $s1
 ## stdout: ['', 'a', 'b']
 
 #### Leading ' ' vs leading ' _ '
-## SKIP: Mixed whitespace/non-whitespace IFS not implemented
 # This behavior is weird, but all shells agree.
 IFS='_ '
 s1='_ a  b _ '
@@ -131,14 +127,12 @@ argv.py $s2
 ## END
 
 #### Multiple non-whitespace IFS chars.
-## SKIP: Multiple non-whitespace IFS characters not implemented
 IFS=_-
 s1='a__b---c_d'
 argv.py $s1
 ## stdout: ['a', '', 'b', '', '', 'c', 'd']
 
 #### IFS with whitespace and non-whitepace.
-## SKIP: Mixed whitespace/non-whitespace IFS not implemented
 # NOTE: Three delimiters means two empty words in the middle.  No elision.
 IFS='_ '
 s1='a_b _ _ _ c  _d e'
@@ -161,7 +155,6 @@ argv.py 1 $space 2
 ## stdout: ['1', '2']
 
 #### empty literals are not elided
-## SKIP: Empty literal elision with adjacent parts not implemented
 space=" "
 argv.py 1 $space"" 2
 ## stdout: ['1', '', '2']
@@ -173,23 +166,20 @@ argv.py $foo
 ## stdout: ['a b']
 
 #### default value can yield multiple words
-## SKIP: Default value with multiple words not implemented
 argv.py 1 ${undefined:-"2 3" "4 5"} 6
 ## stdout: ['1', '2 3', '4 5', '6']
 
 #### default value can yield multiple words with part joining
-## SKIP: Default value with multiple words and joining not implemented
 argv.py 1${undefined:-"2 3" "4 5"}6
 ## stdout: ['12 3', '4 56']
 
 #### default value with unquoted IFS char
-## SKIP: Default value with IFS splitting not implemented
 IFS=_
 argv.py 1${undefined:-"2_3"x_x"4_5"}6
 ## stdout: ['12_3x', 'x4_56']
 
 #### IFS empty doesn't do splitting
-## SKIP: python2 not available
+## SKIP (unimplementable): python2 not available
 IFS=''
 x=$(python2 -c 'print(" a b\tc\n")')
 argv.py $x
@@ -198,7 +188,7 @@ argv.py $x
 ## END
 
 #### IFS unset behaves like $' \t\n'
-## SKIP: python2 not available
+## SKIP (unimplementable): python2 not available
 unset IFS
 x=$(python2 -c 'print(" a b\tc\n")')
 argv.py $x
@@ -216,7 +206,6 @@ argv.py $s
 ## END
 
 #### IFS='\ '
-## SKIP: IFS with backslash not implemented
 # NOTE: OSH fails this because of double backslash escaping issue!
 # When IFS is \, then you're no longer using backslash escaping.
 IFS='\ '
@@ -227,7 +216,6 @@ argv.py $s
 ## END
 
 #### IFS characters are glob metacharacters
-## SKIP: IFS with glob metacharacters not implemented
 IFS='* '
 s='a*b c'
 argv.py $s
@@ -281,7 +269,6 @@ hi
 ## END
 
 #### IFS and joining arrays
-## SKIP: Unquoted $@ keeps params separate in bash regardless of IFS
 IFS=:
 set -- x 'y z'
 argv.py "$@"
@@ -350,7 +337,6 @@ Yspaces=" Y "
 
 
 #### IFS='' with $@ and $* (bug #627)
-## SKIP: Empty IFS with unquoted $@ keeps params separate in bash
 set -- a 'b c'
 IFS=''
 argv.py at $@
@@ -363,7 +349,6 @@ argv.py star $*
 ## END
 
 #### IFS='' with $@ and $* and printf (bug #627)
-## SKIP: Empty IFS with unquoted $@ keeps params separate in bash
 set -- a 'b c'
 IFS=''
 printf '[%s]\n' $@
@@ -376,7 +361,6 @@ printf '[%s]\n' $*
 ## END
 
 #### IFS='' with ${a[@]} and ${a[*]} (bug #627)
-## SKIP: Empty IFS with array expansion not implemented
 case $SH in dash | ash) exit 0 ;; esac
 
 myarray=(a 'b c')
@@ -391,7 +375,6 @@ argv.py star ${myarray[*]}
 ## N-I dash/ash stdout-json: ""
 
 #### IFS='' with ${!prefix@} and ${!prefix*} (bug #627)
-## SKIP: Empty IFS with prefix expansion not implemented
 case $SH in dash | mksh | ash | yash) exit 0 ;; esac
 
 gLwbmGzS_var1=1
@@ -411,7 +394,6 @@ argv.py star ${!gLwbmGzS_*}
 ## N-I dash/mksh/ash/yash stdout-json: ""
 
 #### IFS='' with ${!a[@]} and ${!a[*]} (bug #627)
-## SKIP: Empty IFS with array index expansion not implemented
 case $SH in dash | mksh | ash | yash) exit 0 ;; esac
 
 IFS=''
@@ -500,7 +482,6 @@ noglob
 
 
 #### Empty IFS bug #2141 (from pnut)
-## SKIP: Empty IFS with unquoted $@ keeps params separate in bash
 
 res=0
 sum() {
@@ -538,7 +519,6 @@ sum 12 30 # fails with "fatal: Undefined variable '2'" on res=$(($1 + $2))
 ## END
 
 #### Unicode in IFS
-## SKIP: Read-write file descriptor (<>) not implemented
 
 # bash, zsh, and yash support unicode in IFS, but dash/mksh/ash don't.
 
@@ -560,7 +540,6 @@ printf "<%s>\n" $x
 ## END
 
 #### 4 x 3 table: (default IFS, IFS='', IFS=zx) x ( $* "$*" $@ "$@" )
-## SKIP: Complex IFS and $@/$* combinations not implemented
 
 setopt SH_WORD_SPLIT  # for zsh
 
@@ -642,7 +621,6 @@ argv.py ' "$@" ' "$@"
 ## END
 
 #### 4 x 3 table - with for loop
-## SKIP: zsh setopt not supported
 case $SH in yash) exit ;; esac  # no echo -n
 
 setopt SH_WORD_SPLIT  # for zsh
@@ -690,7 +668,6 @@ echo -n ' "$@" ';  for i in "$@"; do echo -n ' '; echo -n -$i-; done; echo
 ## END
 
 #### IFS=x and '' and $@ - same bug as spec/toysh-posix case #12
-## SKIP: IFS with empty args and $@ not implemented
 case $SH in yash) exit ;; esac  # no echo -n
 
 setopt SH_WORD_SPLIT  # for zsh
@@ -735,7 +712,6 @@ argv.py ' "$@" ' "$@"
 ## END
 
 #### IFS=x and '' and $@ (#2)
-## SKIP: IFS with empty args and $@ not implemented
 setopt SH_WORD_SPLIT  # for zsh
 
 set -- "" "" "" "" ""
@@ -789,7 +765,6 @@ argv.py =$*=
 ## END
 
 #### IFS=x and '' and $@ (#3)
-## SKIP: IFS with empty args and $@ not implemented
 setopt SH_WORD_SPLIT  # for zsh
 
 IFS=x
@@ -838,7 +813,6 @@ argv.py $*
 ## END
 
 #### ""$A"" - empty string on both sides - derived from spec/toysh-posix #15
-## SKIP: Empty string adjacent to unquoted expansion not implemented
 
 A="   abc   def   "
 

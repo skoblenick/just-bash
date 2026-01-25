@@ -103,7 +103,6 @@ done
 ## status: 1
 
 #### errexit and brace group { }
-## SKIP: errexit in compound commands/pipelines not implemented
 set -o errexit
 { test no = yes && echo hi; }
 echo status=$?
@@ -226,7 +225,6 @@ echo 7
 ## END
 
 #### setting errexit in a subshell works but doesn't affect parent shell
-## SKIP: errexit in compound commands/pipelines not implemented
 ( echo 1; false; echo 2; set -o errexit; echo 3; false; echo 4; )
 echo 5
 false
@@ -291,7 +289,6 @@ one
 ## END
 
 #### pipeline process respects errexit
-## SKIP: errexit in compound commands/pipelines not implemented
 set -o errexit
 # It is respected here.
 { echo one; false; echo two; } | cat
@@ -309,8 +306,6 @@ one
 ## END
 
 #### simple command / assign - redir failure DOES respect errexit
-## SKIP: Interactive shell invocation not implemented
-
 $SH -c '
 set -o errexit
 true > /
@@ -372,8 +367,6 @@ status=0
 ## END
 
 #### bash atoms [[ (( - redir failure checked
-## SKIP: Interactive shell invocation not implemented
-
 # bash 5.2 fixed bash 4.4 bug: this is now checked
 
 case $SH in dash) exit ;; esac
@@ -407,7 +400,6 @@ status=2
 
 
 #### brace group - redir failure checked
-## SKIP: errexit in compound commands/pipelines not implemented
 
 # bash 5.2 fixed bash 4.4 bug: this is now checked
 
@@ -508,7 +500,7 @@ should be executed
 
 
 #### Command sub exit code is lost
-## SKIP: Oils-specific shopt options not implemented
+## SKIP (unimplementable): Oils-specific shopt options not implemented
 echo ft $(false) $(true)
 echo status=$?
 

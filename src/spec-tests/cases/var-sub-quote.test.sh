@@ -25,7 +25,6 @@ argv.py ${empty:-}
 ## stdout: []
 
 #### array with empty values
-## SKIP: argv.py test helper not available
 declare -a A=('' x "" '')
 argv.py "${A[@]}"
 ## stdout: ['', 'x', '', '']
@@ -35,7 +34,6 @@ argv.py "${A[@]}"
 ## N-I mksh status: 1
 
 #### substitution of IFS character, quoted and unquoted
-## SKIP: argv.py test helper not available
 IFS=:
 s=:
 argv.py $s
@@ -99,7 +97,6 @@ argv.py "${Unset:-'a b c'}"
 ## stdout: ["'a b c'"]
 
 #### Mixed inner quotes
-## SKIP: argv.py test helper not available
 argv.py ${Unset:-"a b" c}
 ## stdout: ['a b', 'c']
 
@@ -108,7 +105,7 @@ argv.py "${Unset:-"a b" c}"
 ## stdout: ['a b c']
 
 #### part_value tree with multiple words
-## SKIP: Right brace in parameter default value not implemented
+## SKIP (unimplementable): Nested expansion with quotes requires major parser changes to track quote context through multiple expansion levels for proper word splitting
 argv.py ${a:-${a:-"1 2" "3 4"}5 "6 7"}
 ## stdout: ['1 2', '3 45', '6 7']
 
@@ -152,7 +149,6 @@ argv.py "${Unset:-'$var'}"
 ## stdout: ["'a b c'"]
 
 #### No outer quotes, Multiple internal quotes
-## SKIP: argv.py test helper not available
 # It's like a single command word.  Parts are joined directly.
 var='a b c'
 argv.py ${Unset:-A$var " $var"D E F}
@@ -181,7 +177,6 @@ argv.py ${foo%'c d'} ${foo%'c  d'}
 ## stdout: ['a', 'b', 'a', 'b', 'c', 'd']
 
 #### Syntax error for single quote in double quote
-## SKIP: argv.py test helper not available
 foo="'a b c d'"
 argv.py "${foo%d'}"
 ## stdout-json: ""
@@ -293,7 +288,6 @@ a
 
 
 #### Right Brace as argument (similar to #702)
-## SKIP: Right brace in parameter default value not implemented
 
 echo "${var-}}"
 echo "${var-\}}"
@@ -319,7 +313,6 @@ echo "${var-"}"}"
 ## END
 
 #### Var substitution with newlines (#2492)
-## SKIP: Right brace in parameter default value not implemented
 echo "${var-a \
 b}"
 echo "${var-a

@@ -47,7 +47,7 @@ echo $(echo $y)
 ## END
 
 #### xtrace with unprintable chars
-## SKIP: Here-doc edge cases not implemented
+## SKIP (unimplementable): NUL byte handling in heredoc differs
 case $SH in dash) exit ;; esac
 
 $SH >stdout 2>stderr <<'EOF'
@@ -330,7 +330,6 @@ two
 ## END
 
 #### PS4 with unterminated ${
-## SKIP: Unterminated quote error not implemented
 # osh shows inline error; maybe fail like dash/mksh?
 x=1
 PS4='+${x'
@@ -348,7 +347,6 @@ status=0
 ## OK mksh status: 1
 
 #### PS4 with unterminated $(
-## SKIP: Unterminated quote error not implemented
 # osh shows inline error; maybe fail like dash/mksh?
 x=1
 PS4='+$(x'

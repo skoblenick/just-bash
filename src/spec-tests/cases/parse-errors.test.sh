@@ -2,7 +2,7 @@
 ## compare_shells: bash dash mksh
 
 #### Long Token - 65535 bytes
-## SKIP: python2 not available
+## SKIP (unimplementable): python2 not available
 
 python2 -c 'print("echo -n %s" % ("x" * 65535))' > tmp.sh
 $SH tmp.sh > out
@@ -13,7 +13,7 @@ wc --bytes out
 ## END
 
 #### Token that's too long for Oils - 65536 bytes
-## SKIP: python2 not available
+## SKIP (unimplementable): python2 not available
 
 python2 -c 'print("echo -n %s" % ("x" * 65536))' > tmp.sh
 $SH tmp.sh > out
@@ -35,7 +35,6 @@ echo ${%}
 ## OK bash/mksh status: 1
 
 #### Bad var sub caught at parse time
-## SKIP: Parse error detection edge cases not implemented
 if test -f /; then
   echo ${%}
 else
@@ -88,7 +87,6 @@ echo "status=$?"
 ## OK mksh status: 1
 
 #### } on the second line
-## SKIP: errexit in compound commands/pipelines not implemented
 set -o errexit
 {ls;
 }
@@ -156,20 +154,19 @@ echo 1 ;; echo 2
 ## OK mksh status: 1
 
 #### interactive parse error (regression)
-## SKIP: Parse error detection edge cases not implemented
+## SKIP (unimplementable): Shell self-invocation ($SH -i -c ...) not supported
 flags=''
 case $SH in
   bash*|*osh)
     flags='--rcfile /dev/null'
     ;;
-esac  
+esac
 $SH $flags -i -c 'var=)'
 
 ## status: 2
 ## OK mksh status: 1
 
 #### array literal inside array is a parse error
-## SKIP: Nested array literal parse error not detected
 a=( inside=() )
 echo len=${#a[@]}
 ## status: 2

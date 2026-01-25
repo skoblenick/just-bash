@@ -42,7 +42,7 @@ echo "$@"
 ## stdout: x y z
 
 #### set -u with undefined variable exits the interpreter
-## SKIP: Interactive shell invocation not implemented
+## SKIP (unimplementable): Interactive shell invocation not implemented
 
 # non-interactive
 $SH -c 'set -u; echo before; echo $x; echo after'
@@ -64,7 +64,7 @@ OK
 ## END
 
 #### set -u with undefined var in interactive shell does NOT exit the interpreter
-## SKIP: Interactive shell invocation not implemented
+## SKIP (unimplementable): Interactive shell invocation not implemented
 
 # In bash, it aborts the LINE only.  The next line is executed!
 
@@ -99,7 +99,7 @@ OK
 ## END
 
 #### set -u error can break out of nested evals
-## SKIP: Interactive shell invocation not implemented
+## SKIP (unimplementable): Interactive shell invocation not implemented
 $SH -c '
 set -u
 test_function_2() {
@@ -157,7 +157,6 @@ noexec
 ## END
 
 #### 'set' and 'eval' round trip
-## SKIP: printf %q / set output format not implemented
 
 # NOTE: not testing arrays and associative arrays!
 _space='[ ]'
@@ -375,7 +374,6 @@ qux
 ## END
 
 #### set +a stops exporting
-## SKIP: printenv.py test helper not available
 set -a
 FOO=exported
 set +a
@@ -387,7 +385,6 @@ None
 ## END
 
 #### set -o allexport (long form)
-## SKIP: printenv.py test helper not available
 set -o allexport
 VAR1=value1
 set +o allexport
@@ -399,7 +396,6 @@ None
 ## END
 
 #### variables set before set -a are not exported
-## SKIP: printenv.py test helper not available
 BEFORE=before_value
 set -a
 AFTER=after_value

@@ -33,7 +33,6 @@ argv.py $s1$s2 "$s3"
 ## stdout: ['1', '23', '4', '5 6']
 
 #### Word joining
-## SKIP: Word joining with array expansion not implemented
 set -- x y z
 s1='1 2'
 array=(a1 a2)
@@ -59,7 +58,6 @@ argv.py $pat
 ## stdout: ['_tmp/foo.hh', '_tmp/bar.gg', '_tmp/foo.gg']
 
 #### Globbing escaping
-## SKIP: Glob with escaped special characters not implemented
 mkdir -p _tmp
 touch '_tmp/[bc]ar.mm' # file that looks like a glob pattern
 touch _tmp/bar.mm _tmp/car.mm

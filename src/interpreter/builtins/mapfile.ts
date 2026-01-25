@@ -35,7 +35,8 @@ export function handleMapfile(
   while (i < args.length) {
     const arg = args[i];
     if (arg === "-d" && i + 1 < args.length) {
-      delimiter = args[i + 1] || "\n"; // Empty string defaults to newline
+      // In bash, -d '' means use NUL byte as delimiter
+      delimiter = args[i + 1] === "" ? "\0" : args[i + 1] || "\n";
       i += 2;
     } else if (arg === "-n" && i + 1 < args.length) {
       maxCount = Number.parseInt(args[i + 1], 10) || 0;
@@ -82,7 +83,13 @@ export function handleMapfile(
         if (skipped < skipCount) {
           skipped++;
         } else if (maxCount === 0 || lineCount < maxCount) {
-          lines.push(remaining);
+          // Bash truncates at NUL bytes
+          let lastLine = remaining;
+          const nulIdx = lastLine.indexOf("\0");
+          if (nulIdx !== -1) {
+            lastLine = lastLine.substring(0, nulIdx);
+          }
+          lines.push(lastLine);
           lineCount++;
         }
       }
@@ -91,7 +98,13 @@ export function handleMapfile(
 
     // Found delimiter
     let line = remaining.substring(0, delimIndex);
-    if (!trimDelimiter) {
+    // Bash truncates lines at NUL bytes (unlike 'read' which ignores them)
+    const nulIndex = line.indexOf("\0");
+    if (nulIndex !== -1) {
+      line = line.substring(0, nulIndex);
+    }
+    // For other delimiters, include unless -t flag is set
+    if (!trimDelimiter && delimiter !== "\0") {
       line += delimiter;
     }
 
@@ -110,17 +123,25 @@ export function handleMapfile(
     lineCount++;
   }
 
-  // Clear existing array and store lines
-  clearArray(ctx, arrayName);
+  // Clear existing array ONLY if not using -O (offset) option
+  // When using -O, we want to preserve existing elements and append starting at origin
+  if (origin === 0) {
+    clearArray(ctx, arrayName);
+  }
 
   for (let j = 0; j < lines.length; j++) {
     ctx.state.env[`${arrayName}_${origin + j}`] = lines[j];
   }
 
-  // Set array length metadata
-  if (lines.length > 0) {
-    ctx.state.env[`${arrayName}__length`] = String(origin + lines.length);
-  }
+  // Set array length metadata to be the max of existing length and new end position
+  const existingLength = parseInt(
+    ctx.state.env[`${arrayName}__length`] || "0",
+    10,
+  );
+  const newEndIndex = origin + lines.length;
+  ctx.state.env[`${arrayName}__length`] = String(
+    Math.max(existingLength, newEndIndex),
+  );
 
   // Consume from groupStdin if we used it
   if (ctx.state.groupStdin !== undefined && !stdin) {

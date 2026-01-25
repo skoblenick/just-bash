@@ -14,3 +14,5 @@ bench-*.mjs
 todo/
 *.parsed.json
 .pnpm-store
+.docs-test-tmp/
+.claude/

@@ -359,7 +359,7 @@ builtin ls
 ## N-I dash/ash status: 127
 
 #### builtin usage
- 
+
 builtin
 echo status=$?
 

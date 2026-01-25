@@ -211,7 +211,6 @@ hi
 ## END
 
 #### redirect bash extensions:   [[  ((  for ((
-
 case $SH in dash|mksh) exit ;; esac
 
 rm -f dbracket dparen for-expr
@@ -227,10 +226,10 @@ done > for-expr
 wc -l dbracket dparen for-expr
 
 ## STDOUT:
-0 dbracket
-0 dparen
-1 for-expr
-1 total
+  0 dbracket
+  0 dparen
+  1 for-expr
+  1 total
 ## END
 
 ## N-I dash/mksh STDOUT:

@@ -9,7 +9,6 @@ PATH=/bin
 ## stdout: /bin/ls
 
 #### Permission denied
-## SKIP: Permission denied execution not implemented (returns 127 instead of 126)
 touch $TMP/text-file
 $TMP/text-file
 ## status: 126
@@ -31,7 +30,6 @@ echo status=$?
 ## stdout: status=1
 
 #### File with no shebang is executed
-## SKIP: Interactive shell invocation not implemented
 # most shells execute /bin/sh; bash may execute itself
 echo 'echo hi' > $TMP/no-shebang
 chmod +x $TMP/no-shebang
@@ -40,7 +38,6 @@ $SH -c '$TMP/no-shebang'
 ## status: 0
 
 #### File with relative path and no shebang is executed
-## SKIP: $SH invocation for script execution not supported
 cd $TMP
 echo 'echo hi' > no-shebang
 chmod +x no-shebang
@@ -49,7 +46,6 @@ chmod +x no-shebang
 ## status: 0
 
 #### File in relative subdirectory and no shebang is executed
-## SKIP: $SH invocation for script execution not supported
 cd $TMP
 mkdir -p test-no-shebang
 echo 'echo hi' > test-no-shebang/script
@@ -59,7 +55,6 @@ chmod +x test-no-shebang/script
 ## status: 0
 
 #### $PATH lookup
-## SKIP: External command $PATH execution not supported
 cd $TMP
 mkdir -p one two
 echo 'echo one' > one/mycmd
@@ -73,7 +68,6 @@ one
 ## END
 
 #### filling $PATH cache, then insert the same command earlier in cache
-## SKIP: External command $PATH execution not supported
 cd $TMP
 PATH="one:two:$PATH"
 mkdir -p one two
@@ -105,7 +99,7 @@ one
 ## END
 
 #### filling $PATH cache, then deleting command
-## SKIP: External command $PATH execution not supported
+## SKIP (unimplementable): We follow zsh/mksh behavior (re-search PATH) not bash behavior (fail on deleted cached command)
 cd $TMP
 PATH="one:two:$PATH"
 mkdir -p one two
@@ -138,7 +132,6 @@ status=0
 ## END
 
 #### Non-executable on $PATH
-## SKIP: External command $PATH execution not supported
 # shells differ in whether they actually execve('one/cmd') and get EPERM
 
 mkdir -p one two
@@ -159,7 +152,6 @@ status=0
 ## END
 
 #### hash without args prints the cache
-## SKIP: hash builtin not implemented
 whoami >/dev/null
 hash
 echo status=$?
@@ -170,6 +162,7 @@ status=0
 
 # bash uses a weird table.  Although we could use TSV2.
 ## OK bash stdout-json: "hits\tcommand\n   1\t/usr/bin/whoami\nstatus=0\n"
+## OK-2 bash stdout-json: "hits\tcommand\n   1\t/bin/whoami\nstatus=0\n"
 
 ## OK mksh/zsh STDOUT:
 whoami=/usr/bin/whoami
@@ -177,7 +170,6 @@ status=0
 ## END
 
 #### hash with args
-## SKIP: hash builtin not implemented
 hash whoami
 echo status=$?
 hash | grep -o /whoami  # prints it twice
@@ -197,15 +189,13 @@ status=0
 ## END
 
 #### hash -r doesn't allow additional args
-## SKIP: hash builtin not implemented
 hash -r whoami >/dev/null  # avoid weird output with mksh
 echo status=$?
 ## stdout: status=1
 ## OK osh stdout: status=2
 ## BUG dash/bash stdout: status=0
 
-#### Executing command with same name as directory in PATH (#2429)
-## SKIP: External command $PATH execution not supported
+#### PATH resolution skips directories and non-executables
 # Make the following directory structure. File type and permission bits are
 # given on the left.
 # [drwxr-xr-x]  _tmp

@@ -53,6 +53,21 @@ export interface StatementNode extends ASTNode {
   operators: ("&&" | "||" | ";")[];
   /** Run in background? */
   background: boolean;
+  /**
+   * Deferred syntax error. If set, executing this statement will throw a syntax error.
+   * This is used to support bash's incremental parsing behavior where syntax errors
+   * on later lines only trigger if/when execution reaches that line.
+   * Example: `{ls;\n}` - the } is invalid but with errexit, the script exits before reaching it.
+   */
+  deferredError?: {
+    message: string;
+    token: string;
+  };
+  /**
+   * Original source text for verbose mode (set -v).
+   * When verbose mode is enabled, this text is printed to stderr before execution.
+   */
+  sourceText?: string;
 }
 
 // =============================================================================
@@ -65,6 +80,16 @@ export interface PipelineNode extends ASTNode {
   commands: CommandNode[];
   /** Negate exit status with ! */
   negated: boolean;
+  /** Time the pipeline with 'time' keyword */
+  timed?: boolean;
+  /** Use POSIX format for time output (-p flag) */
+  timePosix?: boolean;
+  /**
+   * For each pipe in the pipeline, whether it's |& (pipe stderr too).
+   * pipeStderr[i] indicates if command[i]'s stderr should be piped to command[i+1]'s stdin.
+   * Length is commands.length - 1.
+   */
+  pipeStderr?: boolean[];
 }
 
 /** Union of all command types */
@@ -194,6 +219,7 @@ export interface ConditionalCommandNode extends ASTNode {
   type: "ConditionalCommand";
   expression: ConditionalExpressionNode;
   redirections: RedirectionNode[];
+  line?: number;
 }
 
 // =============================================================================
@@ -206,6 +232,8 @@ export interface FunctionDefNode extends ASTNode {
   name: string;
   body: CompoundCommandNode;
   redirections: RedirectionNode[];
+  /** Source file where the function was defined (for BASH_SOURCE tracking) */
+  sourceFile?: string;
 }
 
 // =============================================================================
@@ -232,6 +260,11 @@ export interface RedirectionNode extends ASTNode {
   type: "Redirection";
   /** File descriptor (default depends on operator) */
   fd: number | null;
+  /**
+   * Variable name for automatic FD allocation ({varname}>file syntax).
+   * When set, bash allocates an FD >= 10 and stores the number in this variable.
+   */
+  fdVariable?: string;
   operator: RedirectionOperator;
   target: WordNode | HereDocNode;
 }
@@ -324,18 +357,23 @@ export interface ParameterExpansionPart extends ASTNode {
   operation: ParameterOperation | null;
 }
 
-export type ParameterOperation =
+/** Operations that can be used as inner operations for indirection (${!ref-default}) */
+export type InnerParameterOperation =
   | DefaultValueOp
   | AssignDefaultOp
   | ErrorIfUnsetOp
   | UseAlternativeOp
   | LengthOp
   | LengthSliceErrorOp
+  | BadSubstitutionOp
   | SubstringOp
   | PatternRemovalOp
   | PatternReplacementOp
   | CaseModificationOp
-  | TransformOp
+  | TransformOp;
+
+export type ParameterOperation =
+  | InnerParameterOperation
   | IndirectionOp
   | ArrayKeysOp
   | VarNamePrefixOp;
@@ -343,6 +381,13 @@ export type ParameterOperation =
 /** ${#VAR:...} - invalid syntax, length cannot have substring */
 export interface LengthSliceErrorOp {
   type: "LengthSliceError";
+}
+
+/** Bad substitution - parsed but errors at runtime (e.g., ${(x)foo} zsh syntax) */
+export interface BadSubstitutionOp {
+  type: "BadSubstitution";
+  /** The raw text that caused the error (for error message) */
+  text: string;
 }
 
 /** ${VAR:-default} or ${VAR-default} */
@@ -419,13 +464,15 @@ export interface CaseModificationOp {
 /** ${var@Q}, ${var@P}, etc. - parameter transformation */
 export interface TransformOp {
   type: "Transform";
-  /** Q=quote, P=prompt, a=attributes, A=assignment, E=escape, K=keys */
-  operator: "Q" | "P" | "a" | "A" | "E" | "K";
+  /** Q=quote, P=prompt, a=attributes, A=assignment, E=escape, K=keys, k=keys(alt), u=ucfirst, U=uppercase, L=lowercase */
+  operator: "Q" | "P" | "a" | "A" | "E" | "K" | "k" | "u" | "U" | "L";
 }
 
-/** ${!VAR} - indirect expansion */
+/** ${!VAR} - indirect expansion, optionally combined with another operation like ${!ref-default} */
 export interface IndirectionOp {
   type: "Indirection";
+  /** Additional operation to apply after indirection (e.g., ${!ref-default}) */
+  innerOp?: InnerParameterOperation;
 }
 
 /** ${!arr[@]} or ${!arr[*]} - array keys/indices */
@@ -472,15 +519,20 @@ export interface ArithmeticExpansionPart extends ASTNode {
 export interface ArithmeticExpressionNode extends ASTNode {
   type: "ArithmeticExpression";
   expression: ArithExpr;
+  /** Original expression text before parsing, used for re-parsing after variable expansion */
+  originalText?: string;
 }
 
 export type ArithExpr =
   | ArithNumberNode
   | ArithVariableNode
+  | ArithSpecialVarNode
   | ArithBinaryNode
   | ArithUnaryNode
   | ArithTernaryNode
   | ArithAssignmentNode
+  | ArithDynamicAssignmentNode
+  | ArithDynamicElementNode
   | ArithGroupNode
   | ArithNestedNode
   | ArithCommandSubstNode
@@ -490,7 +542,9 @@ export type ArithExpr =
   | ArithDynamicNumberNode
   | ArithConcatNode
   | ArithDoubleSubscriptNode
-  | ArithNumberSubscriptNode;
+  | ArithNumberSubscriptNode
+  | ArithSyntaxErrorNode
+  | ArithSingleQuoteNode;
 
 export interface ArithBracedExpansionNode extends ASTNode {
   type: "ArithBracedExpansion";
@@ -540,6 +594,24 @@ export interface ArithNumberSubscriptNode extends ASTNode {
   errorToken: string; // The error token for the error message
 }
 
+/** Syntax error in arithmetic expression - evaluated to error at runtime */
+export interface ArithSyntaxErrorNode extends ASTNode {
+  type: "ArithSyntaxError";
+  errorToken: string; // The invalid token that caused the error
+  message: string; // The error message
+}
+
+/**
+ * Single-quoted string in arithmetic expression.
+ * In $(()) expansion context, this causes an error.
+ * In (()) command context, this is evaluated as a number.
+ */
+export interface ArithSingleQuoteNode extends ASTNode {
+  type: "ArithSingleQuote";
+  content: string; // The content inside the quotes
+  value: number; // The numeric value (for command context)
+}
+
 export interface ArithNumberNode extends ASTNode {
   type: "ArithNumber";
   value: number;
@@ -548,6 +620,14 @@ export interface ArithNumberNode extends ASTNode {
 export interface ArithVariableNode extends ASTNode {
   type: "ArithVariable";
   name: string;
+  /** True if the variable was written with $ prefix (e.g., $x vs x) */
+  hasDollarPrefix?: boolean;
+}
+
+/** Special variable node: $*, $@, $#, $?, $-, $!, $$ */
+export interface ArithSpecialVarNode extends ASTNode {
+  type: "ArithSpecialVar";
+  name: string; // The special var character: *, @, #, ?, -, !, $
 }
 
 export interface ArithBinaryNode extends ASTNode {
@@ -614,6 +694,26 @@ export interface ArithAssignmentNode extends ASTNode {
   /** For associative arrays: literal string key (e.g., 'key' or "key") */
   stringKey?: string;
   value: ArithExpr;
+}
+
+/** Dynamic assignment where variable name is built from concatenation: x$foo = 42 or x$foo[5] = 42 */
+export interface ArithDynamicAssignmentNode extends ASTNode {
+  type: "ArithDynamicAssignment";
+  operator: ArithAssignmentOperator;
+  /** The target expression (ArithConcat) that evaluates to the variable name */
+  target: ArithExpr;
+  /** For array element assignment: the subscript expression */
+  subscript?: ArithExpr;
+  value: ArithExpr;
+}
+
+/** Dynamic array element where array name is built from concatenation: x$foo[5] */
+export interface ArithDynamicElementNode extends ASTNode {
+  type: "ArithDynamicElement";
+  /** The expression (ArithConcat) that evaluates to the array name */
+  nameExpr: ArithExpr;
+  /** The subscript expression */
+  subscript: ArithExpr;
 }
 
 export interface ArithGroupNode extends ASTNode {
@@ -793,12 +893,39 @@ export const AST = {
     pipelines: PipelineNode[],
     operators: ("&&" | "||" | ";")[] = [],
     background = false,
+    deferredError?: { message: string; token: string },
+    sourceText?: string,
   ): StatementNode {
-    return { type: "Statement", pipelines, operators, background };
+    const node: StatementNode = {
+      type: "Statement",
+      pipelines,
+      operators,
+      background,
+    };
+    if (deferredError) {
+      node.deferredError = deferredError;
+    }
+    if (sourceText !== undefined) {
+      node.sourceText = sourceText;
+    }
+    return node;
   },
 
-  pipeline(commands: CommandNode[], negated = false): PipelineNode {
-    return { type: "Pipeline", commands, negated };
+  pipeline(
+    commands: CommandNode[],
+    negated = false,
+    timed = false,
+    timePosix = false,
+    pipeStderr?: boolean[],
+  ): PipelineNode {
+    return {
+      type: "Pipeline",
+      commands,
+      negated,
+      timed,
+      timePosix,
+      pipeStderr,
+    };
   },
 
   simpleCommand(
@@ -863,8 +990,13 @@ export const AST = {
     operator: RedirectionOperator,
     target: WordNode | HereDocNode,
     fd: number | null = null,
+    fdVariable?: string,
   ): RedirectionNode {
-    return { type: "Redirection", fd, operator, target };
+    const node: RedirectionNode = { type: "Redirection", fd, operator, target };
+    if (fdVariable) {
+      node.fdVariable = fdVariable;
+    }
+    return node;
   },
 
   hereDoc(
@@ -943,21 +1075,24 @@ export const AST = {
     name: string,
     body: CompoundCommandNode,
     redirections: RedirectionNode[] = [],
+    sourceFile?: string,
   ): FunctionDefNode {
-    return { type: "FunctionDef", name, body, redirections };
+    return { type: "FunctionDef", name, body, redirections, sourceFile };
   },
 
   conditionalCommand(
     expression: ConditionalExpressionNode,
     redirections: RedirectionNode[] = [],
+    line?: number,
   ): ConditionalCommandNode {
-    return { type: "ConditionalCommand", expression, redirections };
+    return { type: "ConditionalCommand", expression, redirections, line };
   },
 
   arithmeticCommand(
     expression: ArithmeticExpressionNode,
     redirections: RedirectionNode[] = [],
+    line?: number,
   ): ArithmeticCommandNode {
-    return { type: "ArithmeticCommand", expression, redirections };
+    return { type: "ArithmeticCommand", expression, redirections, line };
   },
 };

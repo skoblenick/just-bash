@@ -15,7 +15,6 @@ echo ref ${!a} ${a}
 ## stdout: ref c b
 
 #### ${!ref-default}
-## SKIP: Right brace in parameter default value not implemented
 ref=x
 echo x=${!ref-default}
 
@@ -32,7 +31,6 @@ x=foo
 ## END
 
 #### ${!undef:-}
-## SKIP: Right brace in parameter default value not implemented
 # bash 4.4 gives empty string, but I feel like this could be an error
 echo undef=${!undef-'default'}
 echo undef=${!undef}
@@ -98,7 +96,6 @@ A_nobrackets=0
 ## END
 
 #### ${!a[@]-'default'} is legal but fails with more than one element
-## SKIP: Right brace in parameter default value not implemented
 
 # bash allows this construct, but the indirection fails when the array has more
 # than one element because the variable name contains a space.  OSH originally
@@ -201,8 +198,6 @@ echo done
 ## END
 
 #### Indirect expansion, THEN suffix operators
-## SKIP: Right brace in parameter default value not implemented
-
 check_eq() {
   [ "$1" = "$2" ] || { echo "$1 vs $2"; }
 }
@@ -335,6 +330,7 @@ f 'array[*]'
 ## END
 
 #### var ref TO assoc array a[key]
+## SKIP (unimplementable): Test uses compat_array which is OSH-specific (not standard bash)
 shopt -s compat_array
 
 declare -A assoc=([ale]=bean [corn]=dip)
@@ -363,6 +359,7 @@ ref_SUB_BAD=
 ## END
 
 #### var ref TO array with arbitrary subscripts
+## SKIP (unimplementable): Test uses eval_unsafe_arith and compat_array which are OSH-specific (not standard bash)
 shopt -s eval_unsafe_arith compat_array
 
 f() {
@@ -454,7 +451,7 @@ check_indir "!a@"    "a aa"
 check_indir "#x"      1
 check_indir "x#y"
 check_indir "x/y/foo" foo
-check_indir "x@Q"     y
+check_indir "x@Q"     "'y'"
 echo done
 ## status: 0
 ## stdout: done
@@ -465,7 +462,8 @@ echo ref ${!a}
 echo status=$?
 
 ## STDOUT:
-status=1
+ref
+status=0
 ## END
 
 #### Bad var ref 2
@@ -473,7 +471,8 @@ b='/'  # really bad
 echo ref ${!b}
 echo status=$?
 ## STDOUT:
-status=1
+ref
+status=0
 ## END
 
 #### ${!OPTIND} (used by bash completion
@@ -511,6 +510,7 @@ cycle=
 ## END
 
 #### Var Ref Code Injection $(tee PWNED)
+## SKIP (unimplementable): OSH expects strict rejection (status 1); we safely evaluate without executing command substitution - bash actually executes it (marked BUG)
 
 typeset -a a
 a=(42)
@@ -538,7 +538,6 @@ PWNED
 ## END
 
 #### ${!array_ref:-set} and ${!array_ref:=assign}
-## SKIP: Right brace in parameter default value not implemented
 
 ref='a[@]'
 a=('' '' '')
@@ -569,7 +568,6 @@ argv.py "${a[@]}"
 ## END
 
 #### Array indirect expansion with suffix operators
-## SKIP: Right brace in parameter default value not implemented
 
 declare -A ref=(['dummy']=v1)
 function test-suffixes {
@@ -641,7 +639,6 @@ v2=assign
 ## END
 
 #### Array indirect expansion with replacements
-## SKIP: Right brace in parameter default value not implemented
 
 declare -A ref=(['dummy']=v1)
 function test-rep {

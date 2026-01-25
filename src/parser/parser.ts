@@ -27,6 +27,7 @@ import {
   type RedirectionNode,
   type ScriptNode,
   type StatementNode,
+  type SubshellNode,
   type WordNode,
 } from "../ast/types.js";
 import * as ArithParser from "./arithmetic-parser.js";
@@ -59,6 +60,15 @@ export class Parser {
     quoted: boolean;
   }[] = [];
   private parseIterations = 0;
+  private _input = "";
+
+  /**
+   * Get the raw input string being parsed.
+   * Used by conditional-parser for extracting exact whitespace in regex patterns.
+   */
+  getInput(): string {
+    return this._input;
+  }
 
   /**
    * Check parse iteration limit to prevent infinite loops
@@ -87,6 +97,7 @@ export class Parser {
       );
     }
 
+    this._input = input;
     const lexer = new Lexer(input);
     this.tokens = lexer.tokenize();
 
@@ -291,6 +302,8 @@ export class Parser {
       t === TokenType.DBRACK_START ||
       t === TokenType.FUNCTION ||
       t === TokenType.BANG ||
+      // 'time' is a pipeline prefix that can start a command
+      t === TokenType.TIME ||
       // 'in' can appear as a command name (e.g., 'in' is not reserved outside for/case)
       t === TokenType.IN ||
       // Redirections can appear before command name (e.g., <<EOF tac)
@@ -328,7 +341,13 @@ export class Parser {
       }
 
       // Check for unexpected tokens at statement start
-      this.checkUnexpectedToken();
+      // Returns a deferred error statement if the error should be deferred to execution time
+      const deferredErrorStmt = this.checkUnexpectedToken();
+      if (deferredErrorStmt) {
+        statements.push(deferredErrorStmt);
+        this.skipSeparators(false);
+        continue;
+      }
 
       const posBefore = this.pos;
       const stmt = this.parseStatement();
@@ -357,9 +376,11 @@ export class Parser {
   }
 
   /**
-   * Check for unexpected tokens that can't appear at statement start
+   * Check for unexpected tokens that can't appear at statement start.
+   * Returns a deferred error statement for tokens that should cause errors
+   * at execution time rather than parse time (to match bash's incremental behavior).
    */
-  private checkUnexpectedToken(): void {
+  private checkUnexpectedToken(): StatementNode | null {
     const t = this.current().type;
     const v = this.current().value;
 
@@ -377,8 +398,21 @@ export class Parser {
     }
 
     // Check for unexpected closing braces/parens
+    // These create deferred errors that trigger at execution time, to match
+    // bash's incremental parsing behavior. Example:
+    //   set -o errexit
+    //   {ls;     # This is a command "{ls" that fails (not brace group)
+    //   }        # This would be a syntax error, but errexit exits first
     if (t === TokenType.RBRACE || t === TokenType.RPAREN) {
-      this.error(`syntax error near unexpected token \`${v}'`);
+      const errorMsg = `syntax error near unexpected token \`${v}'`;
+      this.advance(); // Consume the token
+      // Create an empty statement with a deferred error
+      return AST.statement(
+        [AST.pipeline([AST.simpleCommand(null, [], [], [])])],
+        [],
+        false,
+        { message: errorMsg, token: v },
+      );
     }
 
     // Check for case terminators at statement start
@@ -394,6 +428,14 @@ export class Parser {
     if (t === TokenType.SEMICOLON) {
       this.error(`syntax error near unexpected token \`${v}'`);
     }
+
+    // Check for pipe at statement start (e.g., newline followed by |)
+    // This is a syntax error: "| cmd" with nothing before it
+    if (t === TokenType.PIPE || t === TokenType.PIPE_AMP) {
+      this.error(`syntax error near unexpected token \`${v}'`);
+    }
+
+    return null;
   }
 
   // ===========================================================================
@@ -406,6 +448,9 @@ export class Parser {
     if (!this.isCommandStart()) {
       return null;
     }
+
+    // Record the start position for verbose mode source text
+    const startOffset = this.current().start;
 
     const pipelines: PipelineNode[] = [];
     const operators: ("&&" | "||" | ";")[] = [];
@@ -430,7 +475,19 @@ export class Parser {
       background = true;
     }
 
-    return AST.statement(pipelines, operators, background);
+    // Extract source text for verbose mode (set -v)
+    // Get the end position from the last consumed token
+    const endOffset =
+      this.pos > 0 ? this.tokens[this.pos - 1].end : startOffset;
+    const sourceText = this._input.slice(startOffset, endOffset);
+
+    return AST.statement(
+      pipelines,
+      operators,
+      background,
+      undefined,
+      sourceText,
+    );
   }
 
   // ===========================================================================
@@ -438,6 +495,23 @@ export class Parser {
   // ===========================================================================
 
   private parsePipeline(): PipelineNode {
+    // Check for 'time' keyword at the beginning of pipeline
+    // time [-p] pipeline
+    let timed = false;
+    let timePosix = false;
+    if (this.check(TokenType.TIME)) {
+      this.advance();
+      timed = true;
+      // Check for -p option (POSIX format)
+      if (
+        this.check(TokenType.WORD, TokenType.NAME) &&
+        this.current().value === "-p"
+      ) {
+        this.advance();
+        timePosix = true;
+      }
+    }
+
     let negationCount = 0;
 
     // Check for ! (negation) - multiple ! tokens can appear
@@ -449,6 +523,7 @@ export class Parser {
     const negated = negationCount % 2 === 1;
 
     const commands: CommandNode[] = [];
+    const pipeStderr: boolean[] = [];
 
     // Parse first command
     const firstCmd = this.parseCommand();
@@ -459,24 +534,20 @@ export class Parser {
       const pipeToken = this.advance();
       this.skipNewlines();
 
-      // |& redirects stderr to stdin of next command
-      // We'll handle this by adding implicit redirection
+      // Track whether this pipe is |& (pipes stderr too)
+      pipeStderr.push(pipeToken.type === TokenType.PIPE_AMP);
+
       const nextCmd = this.parseCommand();
-
-      if (
-        pipeToken.type === TokenType.PIPE_AMP &&
-        nextCmd.type === "SimpleCommand"
-      ) {
-        // Add implicit 2>&1 redirection
-        nextCmd.redirections.unshift(
-          AST.redirection(">&", AST.word([AST.literal("1")]), 2),
-        );
-      }
-
       commands.push(nextCmd);
     }
 
-    return AST.pipeline(commands, negated);
+    return AST.pipeline(
+      commands,
+      negated,
+      timed,
+      timePosix,
+      pipeStderr.length > 0 ? pipeStderr : undefined,
+    );
   }
 
   // ===========================================================================
@@ -507,6 +578,12 @@ export class Parser {
       return CompoundParser.parseGroup(this);
     }
     if (this.check(TokenType.DPAREN_START)) {
+      // Check if this (( )) closes with ) ) (nested subshells) or )) (arithmetic)
+      // Scan ahead to find the matching close
+      if (this.dparenClosesWithSpacedParens()) {
+        // The (( will close with ) ) - treat as nested subshells ( ( ... ) )
+        return this.parseNestedSubshellsFromDparen();
+      }
       return this.parseArithmeticCommand();
     }
     if (this.check(TokenType.DBRACK_START)) {
@@ -527,6 +604,84 @@ export class Parser {
 
     // Simple command
     return CmdParser.parseSimpleCommand(this);
+  }
+
+  /**
+   * Scan ahead from current DPAREN_START to determine if it closes with ) )
+   * (two separate RPAREN tokens) or )) (DPAREN_END token).
+   * Returns true if it closes with ) ) (nested subshells case).
+   */
+  private dparenClosesWithSpacedParens(): boolean {
+    // Scan through tokens tracking paren depth
+    let depth = 1; // We've seen one (( - need to track nested parens
+    let offset = 1; // Start after the DPAREN_START
+
+    while (offset < this.tokens.length - this.pos) {
+      const tok = this.peek(offset);
+      if (tok.type === TokenType.EOF) {
+        return false;
+      }
+
+      if (
+        tok.type === TokenType.DPAREN_START ||
+        tok.type === TokenType.LPAREN
+      ) {
+        depth++;
+      } else if (tok.type === TokenType.DPAREN_END) {
+        depth -= 2; // )) closes two levels
+        if (depth <= 0) {
+          // Closes with )) - this is arithmetic
+          return false;
+        }
+      } else if (tok.type === TokenType.RPAREN) {
+        depth--;
+        if (depth === 0) {
+          // Check if next token is also RPAREN
+          const nextTok = this.peek(offset + 1);
+          if (nextTok.type === TokenType.RPAREN) {
+            // Closes with ) ) - this is nested subshells
+            return true;
+          }
+        }
+      }
+      offset++;
+    }
+
+    return false;
+  }
+
+  /**
+   * Parse (( ... ) ) as nested subshells when we know it closes with ) ).
+   * We've already determined via dparenClosesWithSpacedParens() that this
+   * DPAREN_START should be treated as two LPAREN tokens.
+   */
+  private parseNestedSubshellsFromDparen(): SubshellNode {
+    // Skip the DPAREN_START token (which we're treating as two LPARENs)
+    this.advance();
+
+    // Parse the inner subshell body
+    // This is like being inside ( ( ... ) ) where we've consumed both (
+    const innerBody = this.parseCompoundList();
+
+    // Expect the first )
+    this.expect(TokenType.RPAREN);
+
+    // Now we're back at the outer subshell level
+    // The inner subshell is our body
+
+    // Expect the second ) (which closes the outer subshell we're implicitly in)
+    this.expect(TokenType.RPAREN);
+
+    const redirections = this.parseOptionalRedirections();
+
+    // Wrap the inner body in a subshell node
+    // The structure is: Subshell(body: [Subshell(body: innerBody)])
+    const innerSubshell = AST.subshell(innerBody, []);
+
+    return AST.subshell(
+      [AST.statement([AST.pipeline([innerSubshell], false, false, false)])],
+      redirections,
+    );
   }
 
   // ===========================================================================
@@ -571,12 +726,49 @@ export class Parser {
     );
   }
 
+  /**
+   * Parse a word without brace expansion (for [[ ]] conditionals).
+   * In bash, brace expansion does not occur inside [[ ]].
+   */
+  parseWordNoBraceExpansion(): WordNode {
+    const token = this.advance();
+    return this.parseWordFromString(
+      token.value,
+      token.quoted,
+      token.singleQuoted,
+      false, // isAssignment
+      false, // hereDoc
+      true, // noBraceExpansion
+    );
+  }
+
+  /**
+   * Parse a word for regex patterns (in [[ =~ ]]).
+   * All escaped characters create Escaped nodes so the backslash is preserved
+   * for the regex engine. For example, \$ creates Escaped("$") which becomes \$
+   * in the final regex pattern.
+   */
+  parseWordForRegex(): WordNode {
+    const token = this.advance();
+    return this.parseWordFromString(
+      token.value,
+      token.quoted,
+      token.singleQuoted,
+      false, // isAssignment
+      false, // hereDoc
+      true, // noBraceExpansion
+      true, // regexPattern
+    );
+  }
+
   parseWordFromString(
     value: string,
     quoted = false,
     singleQuoted = false,
     isAssignment = false,
     hereDoc = false,
+    noBraceExpansion = false,
+    regexPattern = false,
   ): WordNode {
     const parts = ExpParser.parseWordParts(
       this,
@@ -585,6 +777,9 @@ export class Parser {
       singleQuoted,
       isAssignment,
       hereDoc,
+      false, // singleQuotesAreLiteral
+      noBraceExpansion,
+      regexPattern,
     );
     return AST.word(parts);
   }
@@ -741,6 +936,123 @@ export class Parser {
     };
   }
 
+  /**
+   * Check if $(( at position `start` in `value` is a command substitution with nested
+   * subshell rather than arithmetic expansion. This uses similar logic to the lexer's
+   * dparenClosesWithSpacedParens but operates on a string within a word/expansion.
+   *
+   * The key heuristics are:
+   * 1. If it closes with `) )` (separated by whitespace or content), it's a subshell
+   * 2. If at depth 1 we see `||`, `&&`, or single `|`, it's a command context
+   * 3. If it closes with `))`, it's arithmetic
+   *
+   * @param value The string containing the expansion
+   * @param start Position of the `$` in `$((` (so `$((` is at start..start+2)
+   * @returns true if this should be parsed as command substitution, false for arithmetic
+   */
+  isDollarDparenSubshell(value: string, start: number): boolean {
+    const len = value.length;
+    let pos = start + 3; // Skip past $((
+    let depth = 2; // We've seen ((, so we start at depth 2
+    let inSingleQuote = false;
+    let inDoubleQuote = false;
+
+    while (pos < len && depth > 0) {
+      const c = value[pos];
+
+      if (inSingleQuote) {
+        if (c === "'") {
+          inSingleQuote = false;
+        }
+        pos++;
+        continue;
+      }
+
+      if (inDoubleQuote) {
+        if (c === "\\") {
+          // Skip escaped char
+          pos += 2;
+          continue;
+        }
+        if (c === '"') {
+          inDoubleQuote = false;
+        }
+        pos++;
+        continue;
+      }
+
+      // Not in quotes
+      if (c === "'") {
+        inSingleQuote = true;
+        pos++;
+        continue;
+      }
+
+      if (c === '"') {
+        inDoubleQuote = true;
+        pos++;
+        continue;
+      }
+
+      if (c === "\\") {
+        // Skip escaped char
+        pos += 2;
+        continue;
+      }
+
+      if (c === "(") {
+        depth++;
+        pos++;
+        continue;
+      }
+
+      if (c === ")") {
+        depth--;
+        if (depth === 1) {
+          // We just closed the inner subshell, now at outer level
+          // Check if next char is another ) - if so, it's )) = arithmetic
+          const nextPos = pos + 1;
+          if (nextPos < len && value[nextPos] === ")") {
+            // )) - adjacent parens = arithmetic, not nested subshells
+            return false;
+          }
+          // The ) is followed by something else (whitespace, content, etc.)
+          // This indicates it's a subshell with more content after the inner )
+          // e.g., $((which cmd || echo fallback)2>/dev/null)
+          // After `(which cmd || echo fallback)` we have `2>/dev/null)` before the final `)`
+          return true;
+        }
+        if (depth === 0) {
+          // We closed all parens without the pattern we're looking for
+          return false;
+        }
+        pos++;
+        continue;
+      }
+
+      // Check for || or && or | at depth 1 (between inner subshells)
+      // At depth 1, we're inside the outer (( but outside any inner parens.
+      // If we see || or && or | here, it's connecting commands, not arithmetic.
+      if (depth === 1) {
+        if (c === "|" && pos + 1 < len && value[pos + 1] === "|") {
+          return true;
+        }
+        if (c === "&" && pos + 1 < len && value[pos + 1] === "&") {
+          return true;
+        }
+        if (c === "|" && pos + 1 < len && value[pos + 1] !== "|") {
+          // Single | - pipeline operator
+          return true;
+        }
+      }
+
+      pos++;
+    }
+
+    // Didn't find a definitive answer - default to arithmetic behavior
+    return false;
+  }
+
   parseArithmeticExpansion(
     value: string,
     start: number,
@@ -803,7 +1115,7 @@ export class Parser {
   }
 
   private parseArithmeticCommand(): ArithmeticCommandNode {
-    this.expect(TokenType.DPAREN_START);
+    const startToken = this.expect(TokenType.DPAREN_START);
 
     // Read expression until )) at paren depth 0
     // We need to track single paren depth to handle cases like ((a=1 + (2*3)))
@@ -880,7 +1192,22 @@ export class Parser {
         exprStr += ")";
         this.advance();
       } else {
-        exprStr += this.current().value;
+        const value = this.current().value;
+        // Add space between tokens, but not before operators that can form compounds
+        // (like | followed by = to form |=) or after operators that form compounds
+        const lastChar = exprStr.length > 0 ? exprStr[exprStr.length - 1] : "";
+        const needsSpace =
+          exprStr.length > 0 &&
+          !exprStr.endsWith(" ") &&
+          // Don't add space before = after operators that can form compound assignments
+          !(value === "=" && /[|&^+\-*/%<>]$/.test(exprStr)) &&
+          // Don't add space before second < or > (for << or >>)
+          !(value === "<" && lastChar === "<") &&
+          !(value === ">" && lastChar === ">");
+        if (needsSpace) {
+          exprStr += " ";
+        }
+        exprStr += value;
         this.advance();
       }
     }
@@ -893,11 +1220,11 @@ export class Parser {
     const expression = this.parseArithmeticExpression(exprStr.trim());
     const redirections = this.parseOptionalRedirections();
 
-    return AST.arithmeticCommand(expression, redirections);
+    return AST.arithmeticCommand(expression, redirections, startToken.line);
   }
 
   private parseConditionalCommand(): ConditionalCommandNode {
-    this.expect(TokenType.DBRACK_START);
+    const startToken = this.expect(TokenType.DBRACK_START);
 
     const expression = CondParser.parseConditionalExpression(this);
 
@@ -905,7 +1232,7 @@ export class Parser {
 
     const redirections = this.parseOptionalRedirections();
 
-    return AST.conditionalCommand(expression, redirections);
+    return AST.conditionalCommand(expression, redirections, startToken.line);
   }
 
   private parseFunctionDef(): FunctionDefNode {
@@ -914,7 +1241,19 @@ export class Parser {
     // function name { ... } or function name () { ... }
     if (this.check(TokenType.FUNCTION)) {
       this.advance();
-      name = this.expect(TokenType.NAME, "Expected function name").value;
+      // Function names are more permissive than variable names - they can contain
+      // hyphens, dots, colons, slashes, etc. Accept both NAME and WORD tokens.
+      if (this.check(TokenType.NAME) || this.check(TokenType.WORD)) {
+        name = this.advance().value;
+      } else {
+        const token = this.current();
+        throw new ParseException(
+          "Expected function name",
+          token.line,
+          token.column,
+          token,
+        );
+      }
 
       // Optional ()
       if (this.check(TokenType.LPAREN)) {
@@ -924,6 +1263,11 @@ export class Parser {
     } else {
       // name () { ... }
       name = this.advance().value;
+      // Validate that the name doesn't contain expansion characters
+      // bash rejects: $foo() { ... } and foo-$(echo hi)() { ... }
+      if (name.includes("$")) {
+        this.error(`\`${name}': not a valid identifier`);
+      }
       this.expect(TokenType.LPAREN);
       this.expect(TokenType.RPAREN);
     }
@@ -931,34 +1275,38 @@ export class Parser {
     this.skipNewlines();
 
     // Parse body (must be compound command)
-    const body = this.parseCompoundCommandBody();
+    // For function bodies, redirections are NOT parsed on the body - they go on the function def
+    const body = this.parseCompoundCommandBody({ forFunctionBody: true });
 
     const redirections = this.parseOptionalRedirections();
 
     return AST.functionDef(name, body, redirections);
   }
 
-  private parseCompoundCommandBody(): CompoundCommandNode {
+  private parseCompoundCommandBody(options?: {
+    forFunctionBody?: boolean;
+  }): CompoundCommandNode {
+    const skipRedirections = options?.forFunctionBody;
     if (this.check(TokenType.LBRACE)) {
-      return CompoundParser.parseGroup(this);
+      return CompoundParser.parseGroup(this, { skipRedirections });
     }
     if (this.check(TokenType.LPAREN)) {
-      return CompoundParser.parseSubshell(this);
+      return CompoundParser.parseSubshell(this, { skipRedirections });
     }
     if (this.check(TokenType.IF)) {
-      return CompoundParser.parseIf(this);
+      return CompoundParser.parseIf(this, { skipRedirections });
     }
     if (this.check(TokenType.FOR)) {
-      return CompoundParser.parseFor(this);
+      return CompoundParser.parseFor(this, { skipRedirections });
     }
     if (this.check(TokenType.WHILE)) {
-      return CompoundParser.parseWhile(this);
+      return CompoundParser.parseWhile(this, { skipRedirections });
     }
     if (this.check(TokenType.UNTIL)) {
-      return CompoundParser.parseUntil(this);
+      return CompoundParser.parseUntil(this, { skipRedirections });
     }
     if (this.check(TokenType.CASE)) {
-      return CompoundParser.parseCase(this);
+      return CompoundParser.parseCase(this, { skipRedirections });
     }
 
     this.error("Expected compound command for function body");

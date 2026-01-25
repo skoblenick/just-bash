@@ -44,7 +44,6 @@ status=0
 ## END
 
 #### Nested a[i[0]]=0
-case $SH in zsh|ash) exit ;; esac
 
 i=(0 1 2)
 
@@ -120,6 +119,7 @@ typeset b[2]=/home/spec-test/src
 ## END
 
 #### LHS array is protected with shopt -s eval_unsafe_arith, e.g. 'a[$(echo 2)]'
+## SKIP (unimplementable): eval_unsafe_arith is an OSH-specific security feature
 case $SH in zsh|ash) exit ;; esac
 
 a=(0 1 2)
@@ -187,7 +187,6 @@ len=2
 ## END
 
 #### More fragments like a[  a[5  a[5 +  a[5 + 3]
-## SKIP: Interactive shell invocation not implemented
 
 for name in 'a[' 'a[5'; do
   echo "echo hi from $name: \$# args: \$@" > "$name"
@@ -297,9 +296,16 @@ status=0 len=2
 status=1 len=2
 ## END
 
-#### Tricky parsing - a[ a[0]=1 ]=X  a[ a[0]+=1 ]+=X
-case $SH in zsh|mksh|ash) exit ;; esac
+# bash 3.2+ treats single quotes in array index as character values
+## OK bash status: 0
+## OK bash STDOUT:
+status=0 len=1
+status=0 len=2
+status=0 len=3
+status=0 len=4
+## END
 
+#### Tricky parsing - a[ a[0]=1 ]=X  a[ a[0]+=1 ]+=X
 # the nested [] means we can't use regular language lookahead?
 
 echo assign=$(( z[0] = 42 ))

@@ -69,6 +69,12 @@ export interface CommandContext {
   cwd: string;
   /** Environment variables */
   env: Record<string, string>;
+  /**
+   * Exported environment variables only.
+   * Used by commands like printenv and env that should only show exported vars.
+   * In bash, only exported variables are passed to child processes.
+   */
+  exportedEnv?: Record<string, string>;
   /** Standard input content */
   stdin: string;
   /**
@@ -106,6 +112,17 @@ export interface CommandContext {
    * Useful for testing with mock clocks.
    */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * File descriptors map for here-docs and process substitution.
+   * Maps FD numbers to their content (e.g., 3 -> "content from 3<<EOF").
+   * Note: FD 0 content is in `stdin`, but may also appear here for consistency.
+   */
+  fileDescriptors?: Map<number, string>;
+  /**
+   * Whether xpg_echo shopt is enabled.
+   * When true, echo interprets backslash escapes by default (like echo -e).
+   */
+  xpgEcho?: boolean;
 }
 
 export interface Command {

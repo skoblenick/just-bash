@@ -11,7 +11,6 @@ echo ${v#a} ${v##ab}
 ## stdout: bcd cd
 
 #### Remove const suffix is vectorized on user array
-## SKIP: argv.py test helper not available
 a=(1a 2a 3a)
 argv.py ${a[@]%a}
 ## stdout: ['1', '2', '3']
@@ -21,7 +20,6 @@ argv.py ${a[@]%a}
 ## N-I mksh status: 1
 
 #### Remove const suffix is vectorized on $@ array
-## SKIP: argv.py test helper not available
 set -- 1a 2a 3a
 argv.py ${@%a}
 ## stdout: ['1', '2', '3']
@@ -62,7 +60,6 @@ echo ${v%[[:alpha:]]}
 ## N-I mksh stdout: abc
 
 #### Strip unicode prefix
-## SKIP: od command not implemented
 
 show_hex() { od -A n -t c -t x1; }
 
@@ -136,7 +133,6 @@ argv.py "${s%%abcde}" "${s%abcde}" "${s#abcde}" "${s##abcde}"
 ## END
 
 #### Prepend using replacement of #
-## SKIP: argv.py test helper not available
 # This case was found in Kubernetes and others
 array=(aa bb '')
 argv.py ${array[@]/#/prefix-}
@@ -149,7 +145,6 @@ argv.py ${array[@]/#/prefix-}
 ## N-I mksh stdout-json: ""
 
 #### Append using replacement of %
-## SKIP: argv.py test helper not available
 array=(aa bb '')
 argv.py ${array[@]/%/-suffix}
 ## STDOUT:
@@ -230,7 +225,6 @@ foo[]
 ## END
 
 #### Nested % and # operators (bug reported by Crestwave)
-## SKIP: argv.py test helper not available
 var=$'\n'
 argv.py "${var#?}"
 argv.py "${var%''}"
@@ -333,7 +327,6 @@ echo "${x%%?abc?}"
 ## END
 
 #### strip none unicode
-## SKIP: argv.py test helper not available
 x=μabcμ
 argv.py "${x#}"
 argv.py "${x##}"
@@ -347,7 +340,6 @@ argv.py "${x%%}"
 ## END
 
 #### Strip Right Brace (#702)
-## SKIP: Strip pattern with literal dollar sign not implemented
 var='$foo'
 echo 1 "${var#$foo}"
 echo 2 "${var#\$foo}"
@@ -388,12 +380,11 @@ echo 4 ${x##*\(\)}
 ## END
 
 #### extglob in pattern
-## SKIP: extglob not implemented
 case $SH in dash|zsh|ash) exit ;; esac
 
 shopt -s extglob
 
-x='foo()' 
+x='foo()'
 echo 1 ${x%*(foo|bar)'()'}
 echo 2 ${x%%*(foo|bar)'()'}
 echo 3 ${x#*(foo|bar)'()'}

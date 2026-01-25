@@ -43,7 +43,6 @@ hi
 ## END
 
 #### assign readonly -- multiple lines -- set -o posix
-## SKIP: POSIX mode (set -o posix) not implemented
 set -o posix
 readonly x=1
 x=2
@@ -73,7 +72,6 @@ echo hi
 ## OK zsh stdout-json: ""
 
 #### First word like foo$x() and foo$[1+2] (regression)
-## SKIP: Function name with variable expansion not implemented
 
 # Problem: $x() func call broke this error message
 foo$identity('z')
@@ -88,7 +86,6 @@ echo DONE
 ## END
 
 #### Function names
-## SKIP: Function name with variable expansion not implemented
 foo$x() {
   echo hi
 }
@@ -106,6 +103,7 @@ foo $x() {
 
 
 #### file with NUL byte
+## SKIP (unimplementable): NUL byte handling in scripts not implemented
 echo -e 'echo one \0 echo two' > tmp.sh
 $SH tmp.sh
 ## STDOUT:
@@ -177,7 +175,6 @@ status=0
 ## END
 
 #### subshell while running a script (regression)
-## SKIP: Here-doc edge cases not implemented
 # Ensures that spawning a subshell doesn't cause a seek on the file input stream
 # representing the current script (issue #1233).
 cat >tmp.sh <<'EOF'
@@ -278,6 +275,7 @@ echo $as_val
 ## END
 
 #### command execution $(echo 42 | tee PWNED) not allowed
+## SKIP (unimplementable): Security restriction for command substitution in arithmetic not implemented
 
 rm -f PWNED
 
@@ -300,7 +298,6 @@ fi
 ## END
 
 #### process sub <(echo 42 | tee PWNED) not allowed
-
 rm -f PWNED
 
 x='a[<(echo 42 | tee PWNED)]=1'
@@ -325,6 +322,7 @@ NOPE
 
 
 #### unset doesn't allow command execution
+## SKIP (unimplementable): Security restriction for command substitution in unset not implemented
 
 typeset -a a  # for mksh
 a=(42)
@@ -376,6 +374,7 @@ printf '%u\n' 2147483648
 ## END
 
 #### (( status bug
+## SKIP (unimplementable): 64-bit integers not supported (1 << 32 overflows 32-bit)
 case $SH in dash|ash) exit ;; esac
 
 # from Koiche on Zulip

@@ -5,6 +5,8 @@
 import { Bash } from "../Bash.js";
 import {
   getAcceptableStatuses,
+  getAcceptableStderrs,
+  getAcceptableStdouts,
   getExpectedStatus,
   getExpectedStderr,
   getExpectedStdout,
@@ -28,6 +30,8 @@ export interface TestResult {
   expectedStderr?: string | null;
   expectedStatus?: number | null;
   error?: string;
+  /** File path for the test file (used for UNEXPECTED PASS fix commands) */
+  filePath?: string;
 }
 
 export interface RunOptions {
@@ -35,6 +39,8 @@ export interface RunOptions {
   filter?: RegExp;
   /** Custom Bash options */
   bashEnvOptions?: ConstructorParameters<typeof Bash>[0];
+  /** File path for the test file */
+  filePath?: string;
 }
 
 /**
@@ -114,27 +120,43 @@ export async function runTestCase(
     const errors: string[] = [];
 
     // Compare stdout
-    if (expectedStdout !== null) {
+    // Use getAcceptableStdouts to handle OK variants (e.g., "## OK bash stdout-json: ...")
+    const acceptableStdouts = getAcceptableStdouts(testCase);
+    if (acceptableStdouts.length > 0) {
       const normalizedActual = normalizeOutput(result.stdout);
-      const normalizedExpected = normalizeOutput(expectedStdout);
+      const normalizedAcceptable = acceptableStdouts.map((s) =>
+        normalizeOutput(s),
+      );
 
-      if (normalizedActual !== normalizedExpected) {
+      if (!normalizedAcceptable.includes(normalizedActual)) {
         passed = false;
+        const stdoutDesc =
+          normalizedAcceptable.length === 1
+            ? JSON.stringify(normalizedAcceptable[0])
+            : `one of [${normalizedAcceptable.map((s) => JSON.stringify(s)).join(", ")}]`;
         errors.push(
-          `stdout mismatch:\n  expected: ${JSON.stringify(normalizedExpected)}\n  actual:   ${JSON.stringify(normalizedActual)}`,
+          `stdout mismatch:\n  expected: ${stdoutDesc}\n  actual:   ${JSON.stringify(normalizedActual)}`,
         );
       }
     }
 
     // Compare stderr
-    if (expectedStderr !== null) {
+    // Use getAcceptableStderrs to handle OK variants (e.g., "## OK bash STDERR: ...")
+    const acceptableStderrs = getAcceptableStderrs(testCase);
+    if (acceptableStderrs.length > 0) {
       const normalizedActual = normalizeOutput(result.stderr);
-      const normalizedExpected = normalizeOutput(expectedStderr);
+      const normalizedAcceptable = acceptableStderrs.map((s) =>
+        normalizeOutput(s),
+      );
 
-      if (normalizedActual !== normalizedExpected) {
+      if (!normalizedAcceptable.includes(normalizedActual)) {
         passed = false;
+        const stderrDesc =
+          normalizedAcceptable.length === 1
+            ? JSON.stringify(normalizedAcceptable[0])
+            : `one of [${normalizedAcceptable.map((s) => JSON.stringify(s)).join(", ")}]`;
         errors.push(
-          `stderr mismatch:\n  expected: ${JSON.stringify(normalizedExpected)}\n  actual:   ${JSON.stringify(normalizedActual)}`,
+          `stderr mismatch:\n  expected: ${stderrDesc}\n  actual:   ${JSON.stringify(normalizedActual)}`,
         );
       }
     }
@@ -159,6 +181,9 @@ export async function runTestCase(
     if (expectedToFail) {
       if (passed) {
         // Test was expected to fail but passed - report as failure so we can unskip it
+        // The SKIP marker is typically on the line after the test name
+        const skipLineNumber = testCase.lineNumber + 1;
+        const filePath = options.filePath || "<unknown>";
         return {
           testCase,
           passed: false,
@@ -170,7 +195,8 @@ export async function runTestCase(
           expectedStdout,
           expectedStderr,
           expectedStatus,
-          error: `UNEXPECTED PASS: This test was marked ## SKIP (${skipReason}) but now passes. Please remove the ## SKIP directive.`,
+          filePath,
+          error: `FAIL because of UNEXPECTED PASS: This test was marked ## SKIP (${skipReason}) but now passes. Remove with: sed -i '' '${skipLineNumber}d' ${filePath}`,
         };
       }
       // Test was expected to fail and did fail - that's fine, mark as skipped
@@ -261,6 +287,7 @@ function requiresXtrace(testCase: TestCase): boolean {
 
 /**
  * Normalize output for comparison
+ * - Strip comment lines (starting with #) - these are metadata in spec test STDOUT sections
  * - Trim trailing whitespace from each line
  * - Ensure consistent line endings
  * - Trim trailing newline
@@ -268,6 +295,7 @@ function requiresXtrace(testCase: TestCase): boolean {
 function normalizeOutput(output: string): string {
   return output
     .split("\n")
+    .filter((line) => !line.startsWith("#")) // Strip comment lines
     .map((line) => line.trimEnd())
     .join("\n")
     .replace(/\n+$/, "");

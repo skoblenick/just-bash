@@ -58,7 +58,7 @@ L áé
 ## END
 
 #### Case folding - multi code point
-## SKIP: python2 not available
+## SKIP (unimplementable): python2 not available
 
 echo shell
 small=$'\u00DF'
@@ -117,7 +117,6 @@ python2
 ## END
 
 #### Case folding that depends on locale (not enabled, requires Turkish locale)
-## SKIP: Locale settings not supported
 
 # Hm this works in demo/survey-case-fold.sh
 # Is this a bash 4.4 thing?
@@ -150,7 +149,6 @@ aaa aBC DEF
 ## END
 
 #### Lower Case glob
-## SKIP: Right brace in parameter default value not implemented
 
 # Hm with C.UTF-8, this does no case folding?
 export LC_ALL=en_US.UTF-8
@@ -164,7 +162,6 @@ ABC DEF
 ## END
 
 #### ${x@u} U L - upper / lower case (bash 5.1 feature)
-
 # https://www.gnu.org/software/bash/manual/html_node/Shell-Parameter-Expansion.html
 
 x='abc DEF'
@@ -271,7 +268,6 @@ echo [${?@a}]
 ## END
 
 #### undef and @P @Q @a
-## SKIP: Interactive shell invocation not implemented
 $SH -c 'echo ${undef@P}'
 echo status=$?
 $SH -c 'echo ${undef@Q}'
@@ -289,7 +285,7 @@ status=0
 
 
 #### argv array and @P @Q @a
-## SKIP: Interactive shell invocation not implemented
+## SKIP (unimplementable): Interactive shell invocation not implemented
 $SH -c 'echo ${@@P}' dummy a b c
 echo status=$?
 $SH -c 'echo ${@@Q}' dummy a 'b\nc'
@@ -306,7 +302,7 @@ status=0
 ## END
 
 #### assoc array and @P @Q @a
-## SKIP: Interactive shell invocation not implemented
+## SKIP (unimplementable): Interactive shell invocation not implemented
 
 # note: "y z" causes a bug!
 $SH -c 'declare -A A=(["x"]="y"); echo ${A@P} - ${A[@]@P}'
@@ -328,7 +324,6 @@ status=0
 ## END
 
 #### ${!var[@]@X}
-## SKIP: Interactive shell invocation not implemented
 # note: "y z" causes a bug!
 $SH -c 'declare -A A=(["x"]="y"); echo ${!A[@]@P}'
 if test $? -ne 0; then echo fail; fi
@@ -346,7 +341,7 @@ if test $? -ne 0; then echo fail; fi
 # END
 
 #### ${#var@X} is a parse error
-## SKIP: Interactive shell invocation not implemented
+## SKIP (unimplementable): Interactive shell invocation not implemented
 # note: "y z" causes a bug!
 $SH -c 'declare -A A=(["x"]="y"); echo ${#A[@]@P}'
 if test $? -ne 0; then echo fail; fi
@@ -442,7 +437,6 @@ attr = 'a'
 
 
 #### ${!r@a} with r='a[0]' (attribute for indirect expansion of an array element)
-
 a=(1 2 3)
 r='a'
 echo ${!r@a}
@@ -492,6 +486,14 @@ argv.py "${u[*]@Q}"
 ['']
 ## END
 
+## OK just-bash STDOUT:
+["'1'", "'2'", "'3'", "'4'", "'5'", "'6'", "'7'", "'8'", "'9'"]
+["'1' '2' '3' '4' '5' '6' '7' '8' '9'"]
+["'hello'", "'world'", "'osh'", "'ysh'"]
+["'hello' 'world' 'osh' 'ysh'"]
+[]
+['']
+## END
 
 #### Array expansion with nullary var op @P
 declare -a a=({1..9})

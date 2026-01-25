@@ -45,8 +45,7 @@ true
 ## END
 
 
-#### bash and mksh: V in (( a[K] = V )) gets coerced to integer 
-## SKIP: Array value coercion in arithmetic not implemented
+#### bash and mksh: V in (( a[K] = V )) gets coerced to integer
 shopt -u strict_arith || true
 K=key
 V=value
@@ -107,7 +106,6 @@ V=0
 ## END
 
 #### bash: V in (( A["K"] = V )) gets coerced to integer
-## SKIP: Associative array arithmetic assignment edge cases not implemented
 shopt -u strict_arith || true
 K=key
 V=value
@@ -148,7 +146,6 @@ echo $x ${A['y']}
 ## END
 
 #### (( )) with redirect
-## SKIP: stdout_stderr.py test helper not available
 (( a = $(stdout_stderr.py 42) + 10 )) 2>$TMP/x.txt
 echo $a
 echo --
@@ -193,7 +190,6 @@ echo $x
 ## END
 
 #### Example of incrementing associative array entry with var key (ble.sh)
-## SKIP: Associative array $var key expansion in arithmetic not implemented
 declare -A A=(['foo']=42)
 key='foo'
 

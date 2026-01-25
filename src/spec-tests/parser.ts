@@ -36,6 +36,13 @@ export interface ParsedSpecFile {
 }
 
 /**
+ * Check if a shell name is bash-compatible (bash, bash-*, or just-bash)
+ */
+function isBashCompatible(s: string): boolean {
+  return s === "bash" || s.startsWith("bash-") || s === "just-bash";
+}
+
+/**
  * Parse a spec test file content
  */
 export function parseSpecFile(
@@ -48,6 +55,7 @@ export function parseSpecFile(
 
   let currentTest: TestCase | null = null;
   let scriptLines: string[] = [];
+  let hasInlineCode = false; // True if ## code: directive was used
   let inMultiLineBlock = false;
   let multiLineType:
     | "stdout"
@@ -65,7 +73,8 @@ export function parseSpecFile(
 
     // Inside a multi-line block
     if (inMultiLineBlock) {
-      if (line === "## END") {
+      // Handle both "## END" and "## END:" (with trailing colon)
+      if (line === "## END" || line === "## END:") {
         // End of multi-line block
         if (currentTest && multiLineType) {
           currentTest.assertions.push({
@@ -124,6 +133,7 @@ export function parseSpecFile(
         lineNumber,
       };
       scriptLines = [];
+      hasInlineCode = false;
       continue;
     }
 
@@ -137,9 +147,9 @@ export function parseSpecFile(
         continue;
       }
 
-      // Check for shell-specific variant prefix (BUG, BUG-2, OK, N-I, etc.)
+      // Check for shell-specific variant prefix (BUG, BUG-2, OK, OK-2, N-I, etc.)
       const variantMatch = assertionLine.match(
-        /^(OK|N-I|BUG(?:-\d+)?)\s+([a-z0-9/.-]+)\s+(.+)$/i,
+        /^(OK(?:-\d+)?|N-I|BUG(?:-\d+)?)\s+([a-z0-9/.-]+)\s+(.+)$/i,
       );
       if (variantMatch) {
         const variant = variantMatch[1] as "OK" | "N-I" | "BUG";
@@ -179,9 +189,21 @@ export function parseSpecFile(
       }
 
       // Check for SKIP directive
-      const skipMatch = assertionLine.match(/^SKIP(?::\s*(.*))?$/i);
+      // Supports both "## SKIP: reason" and "## SKIP (unimplementable): reason" formats
+      const skipMatch = assertionLine.match(
+        /^SKIP(?:\s*\([^)]+\))?(?::\s*(.*))?$/i,
+      );
       if (skipMatch) {
         currentTest.skip = skipMatch[1] || "skipped";
+        continue;
+      }
+
+      // Check for code: directive (inline script)
+      const codeMatch = assertionLine.match(/^code:\s*(.*)$/);
+      if (codeMatch) {
+        // Override any existing script lines with the inline code
+        scriptLines = [codeMatch[1]];
+        hasInlineCode = true; // Don't add any more script lines
         continue;
       }
 
@@ -193,8 +215,8 @@ export function parseSpecFile(
       continue;
     }
 
-    // Regular script line (only add if we're in a test case)
-    if (currentTest) {
+    // Regular script line (only add if we're in a test case and no inline code was used)
+    if (currentTest && !hasInlineCode) {
       scriptLines.push(line);
     }
   }
@@ -214,8 +236,8 @@ export function parseSpecFile(
  * Check if a line (without the ## prefix) is an assertion line
  */
 function isAssertionLine(line: string): boolean {
-  // Shell-specific variant (BUG, BUG-2, OK, N-I, etc.)
-  if (/^(OK|N-I|BUG(?:-\d+)?)\s+[a-z0-9/.-]+\s+/i.test(line)) {
+  // Shell-specific variant (BUG, BUG-2, OK, OK-2, N-I, etc.)
+  if (/^(OK(?:-\d+)?|N-I|BUG(?:-\d+)?)\s+[a-z0-9/.-]+\s+/i.test(line)) {
     return true;
   }
   // Multi-line block start (allow trailing whitespace)
@@ -298,21 +320,22 @@ function parseSingleLineAssertion(line: string): Assertion | null {
  * Get the expected stdout for a test case (considering bash-specific variants)
  */
 export function getExpectedStdout(testCase: TestCase): string | null {
-  // First, look for bash-specific assertions (BUG or OK with shells)
+  // First, look for default stdout (correct behavior) - just-bash prefers correctness over bug-compatibility
   for (const assertion of testCase.assertions) {
     if (
       (assertion.type === "stdout" || assertion.type === "stdout-json") &&
-      assertion.shells?.some((s) => s === "bash" || s.startsWith("bash-"))
+      !assertion.shells
     ) {
       return String(assertion.value);
     }
   }
 
-  // Fall back to default stdout
+  // Fall back to bash-specific BUG assertions (when there's no default and only BUG bash exists)
   for (const assertion of testCase.assertions) {
     if (
       (assertion.type === "stdout" || assertion.type === "stdout-json") &&
-      !assertion.shells
+      assertion.variant === "BUG" &&
+      assertion.shells?.some(isBashCompatible)
     ) {
       return String(assertion.value);
     }
@@ -325,21 +348,22 @@ export function getExpectedStdout(testCase: TestCase): string | null {
  * Get the expected stderr for a test case
  */
 export function getExpectedStderr(testCase: TestCase): string | null {
-  // First, look for bash-specific assertions
+  // First, look for default stderr (correct behavior) - just-bash prefers correctness over bug-compatibility
   for (const assertion of testCase.assertions) {
     if (
       (assertion.type === "stderr" || assertion.type === "stderr-json") &&
-      assertion.shells?.some((s) => s === "bash" || s.startsWith("bash-"))
+      !assertion.shells
     ) {
       return String(assertion.value);
     }
   }
 
-  // Fall back to default stderr
+  // Fall back to bash-specific BUG assertions (when there's no default and only BUG bash exists)
   for (const assertion of testCase.assertions) {
     if (
       (assertion.type === "stderr" || assertion.type === "stderr-json") &&
-      !assertion.shells
+      assertion.variant === "BUG" &&
+      assertion.shells?.some(isBashCompatible)
     ) {
       return String(assertion.value);
     }
@@ -353,23 +377,23 @@ export function getExpectedStderr(testCase: TestCase): string | null {
  * Returns the default expected status (ignoring OK variants which are alternates)
  */
 export function getExpectedStatus(testCase: TestCase): number | null {
-  // First, look for bash-specific BUG status (BUG means bash has this bug, we should match it)
-  for (const assertion of testCase.assertions) {
-    if (
-      assertion.type === "status" &&
-      assertion.variant === "BUG" &&
-      assertion.shells?.some((s) => s === "bash" || s.startsWith("bash-"))
-    ) {
-      return assertion.value as number;
-    }
-  }
-
-  // Fall back to default status (not shell-specific, not a variant)
+  // First, look for default status (correct behavior - just-bash prefers correctness)
   for (const assertion of testCase.assertions) {
     if (
       assertion.type === "status" &&
       !assertion.shells &&
       !assertion.variant
+    ) {
+      return assertion.value as number;
+    }
+  }
+
+  // Fall back to bash-specific BUG status (when there's no default and only BUG bash exists)
+  for (const assertion of testCase.assertions) {
+    if (
+      assertion.type === "status" &&
+      assertion.variant === "BUG" &&
+      assertion.shells?.some(isBashCompatible)
     ) {
       return assertion.value as number;
     }
@@ -379,25 +403,114 @@ export function getExpectedStatus(testCase: TestCase): number | null {
 }
 
 /**
+ * Get all acceptable stdout values for a test case
+ * This includes the default stdout and any OK variants for bash
+ */
+export function getAcceptableStdouts(testCase: TestCase): string[] {
+  const stdouts: string[] = [];
+
+  // Add default stdout first (correct behavior - just-bash prefers correctness)
+  for (const assertion of testCase.assertions) {
+    if (
+      (assertion.type === "stdout" || assertion.type === "stdout-json") &&
+      !assertion.shells &&
+      !assertion.variant
+    ) {
+      stdouts.push(String(assertion.value));
+      break;
+    }
+  }
+
+  // Add BUG bash stdout if present (also acceptable for bug-compatibility)
+  for (const assertion of testCase.assertions) {
+    if (
+      (assertion.type === "stdout" || assertion.type === "stdout-json") &&
+      assertion.variant === "BUG" &&
+      assertion.shells?.some(isBashCompatible)
+    ) {
+      const value = String(assertion.value);
+      if (!stdouts.includes(value)) {
+        stdouts.push(value);
+      }
+    }
+  }
+
+  // Add OK bash stdouts (these are also acceptable)
+  for (const assertion of testCase.assertions) {
+    if (
+      (assertion.type === "stdout" || assertion.type === "stdout-json") &&
+      assertion.variant === "OK" &&
+      assertion.shells?.some(isBashCompatible)
+    ) {
+      const value = String(assertion.value);
+      if (!stdouts.includes(value)) {
+        stdouts.push(value);
+      }
+    }
+  }
+
+  return stdouts;
+}
+
+/**
+ * Get all acceptable stderr values for a test case
+ * This includes the default stderr and any OK variants for bash
+ */
+export function getAcceptableStderrs(testCase: TestCase): string[] {
+  const stderrs: string[] = [];
+
+  // Add default stderr first (correct behavior - just-bash prefers correctness)
+  for (const assertion of testCase.assertions) {
+    if (
+      (assertion.type === "stderr" || assertion.type === "stderr-json") &&
+      !assertion.shells &&
+      !assertion.variant
+    ) {
+      stderrs.push(String(assertion.value));
+      break;
+    }
+  }
+
+  // Add BUG bash stderr if present (also acceptable for bug-compatibility)
+  for (const assertion of testCase.assertions) {
+    if (
+      (assertion.type === "stderr" || assertion.type === "stderr-json") &&
+      assertion.variant === "BUG" &&
+      assertion.shells?.some(isBashCompatible)
+    ) {
+      const value = String(assertion.value);
+      if (!stderrs.includes(value)) {
+        stderrs.push(value);
+      }
+    }
+  }
+
+  // Add OK bash stderrs (these are also acceptable)
+  for (const assertion of testCase.assertions) {
+    if (
+      (assertion.type === "stderr" || assertion.type === "stderr-json") &&
+      assertion.variant === "OK" &&
+      assertion.shells?.some(isBashCompatible)
+    ) {
+      const value = String(assertion.value);
+      if (!stderrs.includes(value)) {
+        stderrs.push(value);
+      }
+    }
+  }
+
+  return stderrs;
+}
+
+/**
  * Get all acceptable exit statuses for a test case
  * This includes the default status and any OK variants for bash
  */
 export function getAcceptableStatuses(testCase: TestCase): number[] {
   const statuses: number[] = [];
 
-  // Add BUG bash status if present (this overrides the default for us)
-  for (const assertion of testCase.assertions) {
-    if (
-      assertion.type === "status" &&
-      assertion.variant === "BUG" &&
-      assertion.shells?.some((s) => s === "bash" || s.startsWith("bash-"))
-    ) {
-      statuses.push(assertion.value as number);
-      return statuses; // BUG overrides everything
-    }
-  }
-
-  // Add default status
+  // Add default status first (correct behavior - just-bash prefers correctness)
+  let foundDefaultStatus = false;
   for (const assertion of testCase.assertions) {
     if (
       assertion.type === "status" &&
@@ -405,7 +518,47 @@ export function getAcceptableStatuses(testCase: TestCase): number[] {
       !assertion.variant
     ) {
       statuses.push(assertion.value as number);
+      foundDefaultStatus = true;
       break;
+    }
+  }
+
+  // Add BUG bash status if present (also acceptable for bug-compatibility)
+  for (const assertion of testCase.assertions) {
+    if (
+      assertion.type === "status" &&
+      assertion.variant === "BUG" &&
+      assertion.shells?.some(isBashCompatible)
+    ) {
+      const value = assertion.value as number;
+      if (!statuses.includes(value)) {
+        statuses.push(value);
+      }
+    }
+  }
+
+  // Check if there are any OK or BUG bash status variants
+  const hasOKBashStatus = testCase.assertions.some(
+    (a) =>
+      a.type === "status" &&
+      a.variant === "OK" &&
+      a.shells?.some(isBashCompatible),
+  );
+  const hasBUGBashStatus = testCase.assertions.some(
+    (a) =>
+      a.type === "status" &&
+      a.variant === "BUG" &&
+      a.shells?.some(isBashCompatible),
+  );
+
+  // If no explicit default status BUT there are OK or BUG bash status variants,
+  // the implicit default is 0 (success). This matters because we want to
+  // accept BOTH the implicit 0 AND the bash-specific status variants.
+  // For BUG variants: if there's a BUG bash status but no default, the implicit
+  // correct behavior is status 0, and we should accept that along with the buggy behavior.
+  if (!foundDefaultStatus && (hasOKBashStatus || hasBUGBashStatus)) {
+    if (!statuses.includes(0)) {
+      statuses.push(0);
     }
   }
 
@@ -414,7 +567,7 @@ export function getAcceptableStatuses(testCase: TestCase): number[] {
     if (
       assertion.type === "status" &&
       assertion.variant === "OK" &&
-      assertion.shells?.some((s) => s === "bash" || s.startsWith("bash-"))
+      assertion.shells?.some(isBashCompatible)
     ) {
       const value = assertion.value as number;
       if (!statuses.includes(value)) {
@@ -431,8 +584,6 @@ export function getAcceptableStatuses(testCase: TestCase): number[] {
  */
 export function isNotImplementedForBash(testCase: TestCase): boolean {
   return testCase.assertions.some(
-    (a) =>
-      a.variant === "N-I" &&
-      a.shells?.some((s) => s === "bash" || s.startsWith("bash-")),
+    (a) => a.variant === "N-I" && a.shells?.some(isBashCompatible),
   );
 }

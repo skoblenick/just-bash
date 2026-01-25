@@ -9,17 +9,26 @@ exec echo hi
 ## stdout: hi
 
 #### exec builtin with redirects
-## SKIP: Advanced file descriptor redirections not implemented
 exec 1>&2
 echo 'to stderr'
 ## stdout-json: ""
 ## stderr: to stderr
 
 #### exec builtin with here doc
-## SKIP: Test data directory not available
-# This has in a separate file because both code and data can be read from
-# stdin.
-$SH $REPO_ROOT/spec/bin/builtins-exec-here-doc-helper.sh
+# Create the helper script inline - it uses exec to redirect stdin from here-doc
+cat > /tmp/builtins-exec-here-doc-helper.sh <<'SCRIPT'
+exec 0<<EOF
+one
+two
+EOF
+read x
+read y
+echo "x=$x"
+echo "y=$y"
+echo DONE
+SCRIPT
+
+$SH /tmp/builtins-exec-here-doc-helper.sh
 ## STDOUT:
 x=one
 y=two
@@ -331,7 +340,7 @@ status=0
 
 
 #### ulimit of 2**32, 2**31 (int overflow)
-## SKIP: 64-bit integer edge cases not implemented
+## SKIP (unimplementable): 64-bit integer edge cases not implemented
 
 echo -n 'one '; ulimit -f
 
@@ -359,7 +368,7 @@ three 1
 
 
 #### ulimit that is 64 bits
-## SKIP: 64-bit shift overflow not implemented
+## SKIP (unimplementable): 64-bit shift overflow not implemented
 
 # no 64-bit integers
 case $SH in mksh) exit ;; esac
@@ -388,7 +397,7 @@ after 9007199254740992
 
 
 #### arg that would overflow 64 bits is detected
-## SKIP: 64-bit shift overflow not implemented
+## SKIP (unimplementable): 64-bit shift overflow not implemented
 
 # no 64-bit integers
 case $SH in mksh) exit ;; esac
@@ -606,7 +615,7 @@ hard OK
 ## END
 
 #### ulimit -n limits file descriptors
-## SKIP: Interactive shell invocation not implemented
+## SKIP (unimplementable): Interactive shell invocation not implemented
 
 # OSH bug
 # https://oilshell.zulipchat.com/#narrow/channel/502349-osh/topic/alpine.20build.20failures.20-.20make.20-.20ulimit.20-n.2064/with/519691301

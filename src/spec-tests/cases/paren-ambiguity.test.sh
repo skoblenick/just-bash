@@ -2,7 +2,6 @@
 ## oils_failures_allowed: 3
 
 #### (( closed with ) ) after multiple lines is command - #2337
-
 (( echo 1
 echo 2
 (( x ))
@@ -17,7 +16,6 @@ echo 3
 ## END
 
 #### $(( closed with ) ) after multiple lines is command - #2337
-
 echo $(( echo 1
 echo 2
 (( x ))
@@ -34,8 +32,6 @@ echo 3
 ## END
 
 #### (( closed with )) after multiple lines is parse error - #2337
-## SKIP: Interactive shell invocation not implemented
-
 $SH -c '
 (( echo 1
 echo 2
@@ -58,7 +54,6 @@ ok
 ## END
 
 #### $(( closed with )) after multiple lines is parse error - #2337
-## SKIP: Interactive shell invocation not implemented
 
 $SH -c '
 echo $(( echo 1
@@ -97,8 +92,6 @@ bad
 ## END
 
 #### ((gzip example - zdiff package - #2337
-## SKIP: File descriptor close/move syntax (>&-) not implemented
-
 # https://github.com/git-for-windows/git-sdk-64/blob/main/usr/bin/zdiff#L136
 
 gzip_status=$(
@@ -115,7 +108,6 @@ bye
 ## END
 
 #### ((pkg-config example - postfix package - #2337
-
 icu_cppflags=`((pkg-config --cflags icu-uc icu-i18n) ||
                   (pkgconf --cflags icu-uc icu-i18n) ||
                   (icu-config --cppflags)) 2>/dev/null`
@@ -126,7 +118,6 @@ bye
 ## END
 
 #### ((test example - liblo package - #2337
-
 if ! ((test x"$i" = x-g) || (test x"$i" = x-O2)); then
     CF="$CF $i"
 fi
@@ -145,6 +136,9 @@ echo bye
 
 ## STDOUT:
 bye
+## END
+
+## STDERR:
 ## END
 
 ## N-I dash/ash status: 2

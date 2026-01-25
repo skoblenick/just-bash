@@ -82,6 +82,7 @@ EQUAL
 ## END
 
 #### ++ on a whole array increments the first element (disallowed with strict_array)
+## SKIP (unimplementable): strict_array is an OSH-specific shopt option (not standard bash)
 shopt -s strict_array
 
 a=(1 10)
@@ -103,7 +104,6 @@ argv.py "${a[*]#-}"
 ## N-I mksh stdout-json: ""
 
 #### value.BashArray internal representation - Indexed
-
 case $SH in mksh) exit ;; esac
 
 z=()
@@ -156,7 +156,6 @@ status=1
 ## END
 
 #### value.BashArray internal representation - Assoc (ordering is a problem)
-
 case $SH in mksh) exit ;; esac
 
 declare -A A=([k]=v)
@@ -179,6 +178,12 @@ argv.py keys "${!A[@]}"
 argv.py values "${A[@]}"
 
 ## STDOUT:
+declare -A A=(['k']=v)
+['keys', 'k']
+['values', 'v']
+## END
+
+## BUG bash STDOUT:
 declare -A A=([k]="v" )
 ['keys', 'k']
 ['values', 'v']

@@ -111,7 +111,7 @@ None
 ## END
 
 #### Escaped = in command name
-## SKIP: Weird filename test
+## SKIP (unimplementable): Requires external file from Oils project
 # foo=bar is in the 'spec/bin' dir.
 foo\=bar
 ## stdout: HI
@@ -146,8 +146,6 @@ argv.py "$a"
 ## stdout: ['_tmp/*.Z']
 
 #### Env binding in readonly/declare is NOT exported!  (pitfall)
-## SKIP: printenv.py test helper not available
-
 # All shells agree on this, but it's very confusing behavior.
 FOO=foo readonly v=$(printenv.py FOO)
 echo "v=$v"
@@ -173,7 +171,6 @@ a=1 echo b[0]=2 c=3
 ## OK zsh status: 1
 
 #### dynamic local variables (and splitting)
-## SKIP: Dynamic local variable names not implemented
 f() {
   local "$1"  # Only x is assigned here
   echo x=\'$x\'
@@ -282,7 +279,6 @@ x after  = 6
 ## END
 
 #### Reveal existence of "temp frame" (All shells disagree here!!!)
-## SKIP: Temp frame mutation edge cases not implemented
 f() {
   echo "x=$x"
 
@@ -340,7 +336,6 @@ x=
 ## END
 
 #### Test above without 'local' (which is not POSIX)
-## SKIP: Temp frame mutation edge cases not implemented
 f() {
   echo "x=$x"
 
@@ -400,7 +395,6 @@ x=local
 ## END
 
 #### Using ${x-default} after unsetting a temp binding shadowing a global
-## SKIP: Temp frame mutation edge cases not implemented
 f() {
   echo "x=$x"
   local x='local'
@@ -431,7 +425,6 @@ x=local
 ## END
 
 #### static assignment doesn't split
-## SKIP: argv.py test helper not available
 words='a b c'
 export ex=$words
 glo=$words
@@ -447,7 +440,6 @@ argv.py "$ex" "$glo" "$ro"
 
 
 #### aliased assignment doesn't split
-## SKIP: argv.py test helper not available
 shopt -s expand_aliases || true
 words='a b c'
 alias e=export
@@ -511,7 +503,6 @@ argv.py "$ex2" "$ro2"
 ## END
 
 #### assign and glob
-## SKIP: argv.py test helper not available
 cd $TMP
 touch foo=a foo=b
 foo=*
@@ -532,7 +523,6 @@ unset foo
 ## END
 
 #### declare and glob
-## SKIP: argv.py test helper not available
 cd $TMP
 touch foo=a foo=b
 typeset foo=*
@@ -586,7 +576,6 @@ foo
 ## END
 
 #### local a=loc $var c=loc
-## SKIP: argv.py test helper not available
 var='b'
 b=global
 echo $b
@@ -605,8 +594,6 @@ global
 ## END
 
 #### redirect after assignment builtin (eval redirects after evaluating arguments)
-## SKIP: stdout_stderr.py test helper not available
-
 # See also: spec/redir-order.test.sh (#2307)
 # The $(stdout_stderr.py) is evaluated *before* the 2>/dev/null redirection
 
@@ -621,7 +608,6 @@ STDERR
 ## BUG zsh stderr-json: ""
 
 #### redirect after command sub (like case above but without assignment builtin)
-## SKIP: stdout_stderr.py test helper not available
 echo stdout=$(stdout_stderr.py) 2>/dev/null
 ## STDOUT:
 stdout=STDOUT
@@ -631,7 +617,6 @@ STDERR
 ## END
 
 #### redirect after bare assignment
-## SKIP: stdout_stderr.py test helper not available
 x=$(stdout_stderr.py) 2>/dev/null
 echo done
 ## STDOUT:
@@ -779,5 +764,8 @@ argv.py "${a[@]}"
 ## END
 ## OK mksh status: 1
 ## OK mksh stdout-json: ""
+# just-bash treats readonly assignment as fatal (matches mksh)
+## OK bash status: 1
+## OK bash stdout-json: ""
 ## N-I dash status: 99
 ## N-I dash stdout-json: ""

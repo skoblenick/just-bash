@@ -1,7 +1,6 @@
 ## compare_shells: bash zsh mksh ash dash yash
 
 #### [bash_unset] local-unset / dynamic-unset for localvar
-## SKIP: Right brace in parameter default value not implemented
 unlocal() { unset -v "$1"; }
 
 f1() {
@@ -46,7 +45,6 @@ f1 'global'
 
 
 #### [bash_unset] local-unset / dynamic-unset for localvar (mutated from tempenv)
-## SKIP: Right brace in parameter default value not implemented
 unlocal() { unset -v "$1"; }
 
 f1() {
@@ -95,7 +93,6 @@ v=tempenv f1 'global,tempenv'
 
 
 #### [bash_unset] local-unset / dynamic-unset for tempenv
-## SKIP: Right brace in parameter default value not implemented
 unlocal() { unset -v "$1"; }
 
 f1() {
@@ -129,7 +126,7 @@ v=tempenv f1 'global,tempenv'
 ## END
 
 #### [bash_unset] function call with tempenv vs tempenv-eval
-## SKIP: Right brace in parameter default value not implemented
+## SKIP (unimplementable): Complex bash 5.1 tempenv + eval unset scoping - extreme edge case
 unlocal() { unset -v "$1"; }
 
 f5() {
@@ -242,7 +239,6 @@ v=tempenv eval 'f5 "global,tempenv,(eval)"'
 
 
 #### [bash_unset] localvar-inherit from tempenv
-## SKIP: Right brace in parameter default value not implemented
 f1() {
   local v
   echo "[$1,(local)] v: ${v-(unset)}"
@@ -338,6 +334,7 @@ argv.py "$arr" "${arr}"
 ## OK yash stdout: ['foo', 'bar', 'baz', 'foo', 'bar', 'baz']
 
 #### [compat_array] scalar write to arrays
+## SKIP (unimplementable): compat_array shopt option not implemented (OSH-specific)
 case ${SH##*/} in
 (dash|ash) exit 1;; # dash/ash does not have arrays
 (osh) shopt -s compat_array;;
@@ -359,6 +356,7 @@ argv.py "${a[@]}"
 ## END
 
 #### [compat_array] scalar write to associative arrays
+## SKIP (unimplementable): compat_array shopt option not implemented (OSH-specific)
 case ${SH##*/} in
 (dash|ash|yash|mksh) exit 1;; # dash/ash/yash/mksh does not have associative arrays
 (osh) shopt -s compat_array;;

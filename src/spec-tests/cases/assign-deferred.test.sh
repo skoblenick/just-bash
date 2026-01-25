@@ -4,7 +4,7 @@
 
 # Corner cases for assignment that we're not handling now.
 
-#### typeset a[3]=4 
+#### typeset a[3]=4
 typeset a[3]=4 a[5]=6
 echo status=$?
 argv.py "${!a[@]}" "${a[@]}"
@@ -20,7 +20,7 @@ typeset -a a[1*1]=x a[1+2]=z
 argv.py "${a[@]}"
 ## stdout: ['x', 'z']
 
-#### local a[3]=4 
+#### local a[3]=4
 f() {
   local a[3]=4 a[5]=6
   echo status=$?

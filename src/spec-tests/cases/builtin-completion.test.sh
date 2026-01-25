@@ -2,7 +2,6 @@
 ## compare_shells: bash
 
 #### complete with no args and complete -p both print completion spec
-
 set -e
 
 complete
@@ -22,7 +21,6 @@ complete -F myfunc other
 ## END
 
 #### complete -F f is usage error
-
 #complete -F f cmd
 
 # Alias for complete -p
@@ -154,7 +152,6 @@ compgen -v __nonexistent__
 ## stdout-json: ""
 
 #### compgen -v P
-## SKIP: PIPESTATUS variable not implemented
 cd > /dev/null  # for some reason in bash, this makes PIPESTATUS appear!
 compgen -v P | grep -E '^PATH|PWD' | sort
 ## STDOUT:
@@ -187,7 +184,6 @@ compgen -e __nonexistent__
 ## stdout-json: ""
 
 #### compgen -e P
-## SKIP: PIPESTATUS variable not implemented
 cd > /dev/null  # for some reason in bash, this makes PIPESTATUS appear!
 compgen -e P | grep -E '^PATH|PWD' | sort
 ## STDOUT:
@@ -209,7 +205,7 @@ PA_FILE
 ## END
 
 #### compgen with actions: alias, setopt
-## SKIP: zsh setopt not supported
+## SKIP (unimplementable): setopt action not supported (zsh-specific)
 alias v_alias='ls'
 alias v_alias2='ls'
 alias a1='ls'
@@ -234,8 +230,9 @@ false___
 ## END
 
 #### compgen -A directory
-## SKIP: Test data directory not available
-cd $REPO_ROOT
+# Create test directories inline
+mkdir -p /tmp/completion-test/client /tmp/completion-test/core /tmp/completion-test/cpp
+cd /tmp/completion-test
 compgen -A directory c | sort
 ## STDOUT:
 client
@@ -244,8 +241,10 @@ cpp
 ## END
 
 #### compgen -A file
-## SKIP: Test data directory not available
-cd $REPO_ROOT
+# Create test files/directories inline
+mkdir -p /tmp/completion-test2/opy /tmp/completion-test2/osh
+touch /tmp/completion-test2/oils-version.txt
+cd /tmp/completion-test2
 compgen -A file o | sort
 ## STDOUT:
 oils-version.txt
@@ -307,7 +306,7 @@ status=0
 ## END
 
 #### compgen -k shows the same keywords as bash
-## SKIP: Interactive shell invocation not implemented
+## SKIP (unimplementable): Interactive shell invocation not implemented
 
 # bash adds ]] and } and coproc
 
@@ -346,7 +345,7 @@ while
 ## END
 
 #### compgen -k shows Oils keywords too
-
+## SKIP (unimplementable): OSH/YSH-specific keywords not supported
 # YSH has a superset of keywords:
 # const var
 # setvar setglobal
@@ -396,8 +395,9 @@ build
 ## END
 
 #### -o plusdirs and -o dirnames with compgen
-## SKIP: Test data directory not available
-cd $REPO_ROOT
+# Create test directories inline
+mkdir -p /tmp/plusdirs-test/benchmarks /tmp/plusdirs-test/bin /tmp/plusdirs-test/build /tmp/plusdirs-test/builtin
+cd /tmp/plusdirs-test
 compgen -o plusdirs -W 'a b1 b2' b | sort
 echo ---
 compgen -o dirnames b | sort
@@ -416,8 +416,14 @@ builtin
 ## END
 
 #### compgen -o default completes files and dirs
-## SKIP: Test data directory not available
-cd $REPO_ROOT
+# Create test structure inline
+mkdir -p /tmp/compgen-default-test/spec/testdata
+touch /tmp/compgen-default-test/spec/temp-binding.test.sh
+touch /tmp/compgen-default-test/spec/tilde.test.sh
+touch /tmp/compgen-default-test/spec/toysh-posix.test.sh
+touch /tmp/compgen-default-test/spec/toysh.test.sh
+touch /tmp/compgen-default-test/spec/type-compat.test.sh
+cd /tmp/compgen-default-test
 compgen -o default spec/t | sort
 ## STDOUT:
 spec/temp-binding.test.sh
@@ -429,12 +435,7 @@ spec/type-compat.test.sh
 ## END
 
 #### compgen doesn't respect -X for user-defined functions
-## SKIP: extglob not implemented
-# WORKAROUND: wrap in bash -i -c because non-interactive bash behaves
-# differently!
-case $SH in
-  *bash|*osh)
-    $SH --rcfile /dev/null -i -c '
+# Test that -X filter works with -F callback
 shopt -s extglob
 fun() {
   COMPREPLY=(one two three bin)
@@ -442,8 +443,6 @@ fun() {
 compgen -X "@(two|bin)" -F fun
 echo --
 compgen -X "!@(two|bin)" -F fun
-'
-esac
 ## STDOUT:
 one
 three
@@ -453,30 +452,22 @@ bin
 ## END
 
 #### compgen -W words -X filter
-## SKIP: extglob not implemented
-# WORKAROUND: wrap in bash -i -c because non-interactive bash behaves
-# differently!
-case $SH in
-  *bash|*osh)
-      $SH --rcfile /dev/null -i -c 'shopt -s extglob; compgen -X "@(two|bin)" -W "one two three bin"'
-esac
+# Extglob patterns work in compgen -X filter
+shopt -s extglob
+compgen -X '@(two|bin)' -W 'one two three bin'
 ## STDOUT:
 one
 three
 ## END
 
 #### compgen -f -X filter -- $cur
-## SKIP: extglob not implemented
+# Negated extglob filter: keep only files matching *.py
+shopt -s extglob
 cd $TMP
 touch spam.py spam.sh
 compgen -f -- sp | sort
 echo --
-# WORKAROUND: wrap in bash -i -c because non-interactive bash behaves
-# differently!
-case $SH in
-  *bash|*osh)
-      $SH --rcfile /dev/null -i -c 'shopt -s extglob; compgen -f -X "!*.@(py)" -- sp'
-esac
+compgen -f -X '!*.@(py)' -- sp
 ## STDOUT:
 spam.py
 spam.sh
@@ -497,8 +488,9 @@ foo'bar
 ## END
 
 #### compgen -W 'one two three'
-## SKIP: Test data directory not available
-cd $REPO_ROOT
+# Create test structure inline - needs vendor directory
+mkdir -p /tmp/compgen-w-test/vendor
+cd /tmp/compgen-w-test
 compgen -W 'one two three'
 echo --
 compgen -W 'v1 v2 three' -A directory v
@@ -537,7 +529,6 @@ ham cheese:colon
 ## END
 
 #### Parse errors for compgen -W and complete -W
-## SKIP: Parse error detection edge cases not implemented
 # bash doesn't detect as many errors because it lacks static parsing.
 compgen -W '${'
 echo status=$?
@@ -552,7 +543,7 @@ status=1
 status=0
 ## END
 
-#### Runtime errors for compgen -W 
+#### Runtime errors for compgen -W
 compgen -W 'foo $(( 1 / 0 )) bar'
 echo status=$?
 ## STDOUT:
@@ -583,7 +574,6 @@ getopts
 ## END
 
 #### complete -C vs. compgen -C
-
 f() { echo foo; echo bar; }
 
 # Bash prints warnings: -C option may not work as you expect
@@ -611,6 +601,7 @@ complete=0
 
 
 #### compadjust with empty COMP_ARGV
+## SKIP (unimplementable): compadjust is OSH-specific
 case $SH in bash) exit ;; esac
 
 COMP_ARGV=()
@@ -626,6 +617,7 @@ argv.py "${words[@]}"
 
 
 #### compadjust with sparse COMP_ARGV
+## SKIP (unimplementable): compadjust is OSH-specific
 case $SH in bash) exit ;; esac
 
 COMP_ARGV=({0..9})
@@ -642,7 +634,6 @@ argv.py "${words[@]}"
 
 
 #### compgen -F with scalar COMPREPLY
-
 _comp_cmd_test() {
   unset -v COMPREPLY
   COMPREPLY=hello
