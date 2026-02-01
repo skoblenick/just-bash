@@ -28,7 +28,7 @@ Key features of just-bash:
 - Custom command support via defineCommand
 - Network access control with URL allowlists
 
-Only use the readFile tool if you are sure a file exists. readFile cannot read directories.
+Use cat to read files. Use head, tail to read parts of large files.
 
 Keep responses concise. You do not have access to pnpm, npm, or node.`;
 
@@ -45,7 +45,9 @@ export async function POST(req: Request) {
   const agent = new ToolLoopAgent({
     model: "claude-haiku-4-5",
     instructions: SYSTEM_INSTRUCTIONS,
-    tools: bashToolkit.tools,
+    tools: {
+      bash: bashToolkit.tools.bash,
+    },
     stopWhen: stepCountIs(20),
   });
 
