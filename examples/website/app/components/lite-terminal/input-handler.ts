@@ -156,7 +156,8 @@ export class InputHandler {
 
     const cursor = this.container.querySelector(".lite-terminal-cursor");
     if (cursor) {
-      cursor.scrollIntoView({ block: "center" });
+      // Use "nearest" to avoid scrolling too far on iOS
+      cursor.scrollIntoView({ block: "nearest" });
     }
   }
 
@@ -301,6 +302,10 @@ export class InputHandler {
           break;
         case "Tab":
           data = "\t";
+          break;
+        case " ":
+        case "Spacebar": // Older browsers
+          data = " ";
           break;
         case "Escape":
           data = "\x1b";

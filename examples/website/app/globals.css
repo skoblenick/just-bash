@@ -80,9 +80,13 @@ noscript pre {
 .lite-terminal-output {
   margin: 0;
   padding: 0;
+  max-width: 100%;
+}
+
+.lite-terminal-line {
   white-space: pre-wrap;
   word-break: break-all;
-  max-width: 100%;
+  min-height: 1.2em;
 }
 
 .lite-terminal-cursor {

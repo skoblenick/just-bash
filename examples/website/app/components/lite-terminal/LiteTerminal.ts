@@ -34,6 +34,11 @@ export class LiteTerminal {
   private pendingWrites: string[] = [];
   private writeScheduled = false;
 
+  // Incremental rendering state
+  private lineElements: HTMLElement[] = [];
+  private dirtyLines: Set<number> = new Set();
+  private lastCursorLine = -1;
+
   constructor(options: LiteTerminalOptions = {}) {
     this._options = {
       cursorBlink: true,
@@ -146,7 +151,10 @@ export class LiteTerminal {
     this.currentCol = 0;
     this.currentStyle = {};
     this.parser.reset();
-    this.render();
+    this.lineElements = [];
+    this.dirtyLines.clear();
+    this.lastCursorLine = -1;
+    this.render(true); // Force full render
   }
 
   /**
@@ -200,11 +208,19 @@ export class LiteTerminal {
 
     const results = this.parser.parse(combined);
 
+    // Track starting line for dirty marking
+    const startLine = this.currentLine;
+
     for (const result of results) {
       this.processParseResult(result);
     }
 
-    this.render();
+    // Mark affected lines as dirty
+    for (let i = startLine; i <= this.currentLine; i++) {
+      this.dirtyLines.add(i);
+    }
+
+    this.render(false);
     this.scrollToBottom();
   }
 
@@ -328,17 +344,35 @@ export class LiteTerminal {
    * Start a new line
    */
   private newLine(): void {
+    // Mark current line as dirty before moving
+    this.dirtyLines.add(this.currentLine);
+
     this.currentLine++;
     this.currentCol = 0;
     if (this.currentLine >= this.lines.length) {
       this.lines.push([]);
+      // Add new line element to DOM
+      if (this.outputElement) {
+        const lineEl = document.createElement("div");
+        lineEl.className = "lite-terminal-line";
+        this.lineElements.push(lineEl);
+        this.outputElement.appendChild(lineEl);
+      }
     }
+
+    // Mark new line as dirty
+    this.dirtyLines.add(this.currentLine);
 
     // Trim old lines if we exceed the scrollback limit
     if (this.lines.length > MAX_SCROLLBACK_LINES) {
       const trimCount = this.lines.length - MAX_SCROLLBACK_LINES;
       this.lines.splice(0, trimCount);
       this.currentLine -= trimCount;
+      // Also remove corresponding line elements
+      for (let i = 0; i < trimCount; i++) {
+        const el = this.lineElements.shift();
+        el?.remove();
+      }
     }
   }
 
@@ -393,6 +427,8 @@ export class LiteTerminal {
         }
         // Remove all segments after cursor position
         line.splice(segmentIndex);
+        // Mark as dirty
+        this.dirtyLines.add(this.currentLine);
         break;
 
       case "screen":
@@ -400,6 +436,9 @@ export class LiteTerminal {
         this.lines = [[]];
         this.currentLine = 0;
         this.currentCol = 0;
+        this.lineElements = [];
+        this.dirtyLines.clear();
+        this.lastCursorLine = -1;
         break;
     }
   }
@@ -419,91 +458,131 @@ export class LiteTerminal {
 
   /**
    * Render the terminal content to DOM with inline cursor
+   * Uses incremental updates when possible for better iOS performance
    */
-  private render(): void {
+  private render(forceFullRender = false): void {
     if (!this.outputElement || !this.cursorElement) return;
 
-    // Build content with cursor inserted at the right position
-    const container = document.createDocumentFragment();
-    let totalChars = 0;
-    const cursorPos = this.getCursorCharPosition();
-    let cursorInserted = false;
+    // Full render if forced or if structure changed significantly
+    if (forceFullRender || this.lineElements.length === 0 ||
+        this.lines.length !== this.lineElements.length) {
+      this.fullRender();
+      return;
+    }
 
-    for (let lineIndex = 0; lineIndex < this.lines.length; lineIndex++) {
-      const line = this.lines[lineIndex];
+    // Incremental render: only update dirty lines and cursor position
+    const cursorMoved = this.lastCursorLine !== this.currentLine;
 
-      for (const segment of line) {
-        if (segment.text) {
-          const segmentStart = totalChars;
-          const segmentEnd = totalChars + segment.text.length;
+    // If cursor moved to a different line, mark both old and new lines dirty
+    if (cursorMoved && this.lastCursorLine >= 0 && this.lastCursorLine < this.lines.length) {
+      this.dirtyLines.add(this.lastCursorLine);
+    }
+    this.dirtyLines.add(this.currentLine);
 
-          // Check if cursor falls within this segment
-          if (!cursorInserted && cursorPos >= segmentStart && cursorPos < segmentEnd) {
-            const offsetInSegment = cursorPos - segmentStart;
-            const beforeCursor = segment.text.slice(0, offsetInSegment);
-            const afterCursor = segment.text.slice(offsetInSegment);
-
-            // Text before cursor
-            if (beforeCursor) {
-              container.appendChild(this.createStyledSpan(beforeCursor, segment.style));
-            }
-
-            // Insert cursor
-            container.appendChild(this.cursorElement);
-            cursorInserted = true;
-
-            // Text after cursor
-            if (afterCursor) {
-              container.appendChild(this.createStyledSpan(afterCursor, segment.style));
-            }
-          } else {
-            container.appendChild(this.createStyledSpan(segment.text, segment.style));
-          }
-
-          totalChars += segment.text.length;
-        }
-      }
-
-      // Check if cursor is at end of this line (before newline)
-      if (!cursorInserted && cursorPos === totalChars && lineIndex === this.currentLine) {
-        container.appendChild(this.cursorElement);
-        cursorInserted = true;
-      }
-
-      if (lineIndex < this.lines.length - 1) {
-        container.appendChild(document.createTextNode("\n"));
-        totalChars++; // Count the newline
+    // Update only dirty lines
+    for (const lineIndex of this.dirtyLines) {
+      if (lineIndex < this.lines.length && lineIndex < this.lineElements.length) {
+        this.renderLine(lineIndex);
       }
     }
 
-    // If cursor wasn't inserted yet (at very end), append it
-    if (!cursorInserted) {
-      container.appendChild(this.cursorElement);
-    }
+    this.dirtyLines.clear();
+    this.lastCursorLine = this.currentLine;
 
-    // Update DOM
-    this.outputElement.innerHTML = "";
-    this.outputElement.appendChild(container);
-
-    // Update cursor size
+    // Update cursor size if needed
     this.updateCursorSize();
   }
 
   /**
-   * Get the absolute character position of the cursor
+   * Full re-render of all content (used on initial render or structural changes)
    */
-  private getCursorCharPosition(): number {
-    let pos = 0;
+  private fullRender(): void {
+    if (!this.outputElement || !this.cursorElement) return;
 
-    for (let i = 0; i < this.currentLine; i++) {
-      for (const segment of this.lines[i]) {
-        pos += segment.text.length;
-      }
-      pos++; // For the newline
+    this.outputElement.innerHTML = "";
+    this.lineElements = [];
+
+    for (let lineIndex = 0; lineIndex < this.lines.length; lineIndex++) {
+      const lineEl = document.createElement("div");
+      lineEl.className = "lite-terminal-line";
+      this.lineElements.push(lineEl);
+      this.outputElement.appendChild(lineEl);
+      this.renderLineContent(lineIndex, lineEl);
     }
 
-    pos += this.currentCol;
-    return pos;
+    this.dirtyLines.clear();
+    this.lastCursorLine = this.currentLine;
+    this.updateCursorSize();
+  }
+
+  /**
+   * Re-render a single line
+   */
+  private renderLine(lineIndex: number): void {
+    const lineEl = this.lineElements[lineIndex];
+    if (!lineEl) return;
+    this.renderLineContent(lineIndex, lineEl);
+  }
+
+  /**
+   * Render the content of a single line into a line element
+   */
+  private renderLineContent(lineIndex: number, lineEl: HTMLElement): void {
+    if (!this.cursorElement) return;
+
+    lineEl.innerHTML = "";
+    const line = this.lines[lineIndex];
+    const isCursorLine = lineIndex === this.currentLine;
+
+    if (!isCursorLine) {
+      // Simple case: no cursor on this line, just render segments
+      for (const segment of line) {
+        if (segment.text) {
+          lineEl.appendChild(this.createStyledSpan(segment.text, segment.style));
+        }
+      }
+      // Add empty text node to ensure line has height
+      if (line.length === 0 || line.every(s => !s.text)) {
+        lineEl.appendChild(document.createTextNode("\u200B")); // Zero-width space
+      }
+      return;
+    }
+
+    // Cursor line: need to insert cursor at correct position
+    let charPos = 0;
+    let cursorInserted = false;
+
+    for (const segment of line) {
+      if (!segment.text) continue;
+
+      const segStart = charPos;
+      const segEnd = charPos + segment.text.length;
+
+      if (!cursorInserted && this.currentCol >= segStart && this.currentCol < segEnd) {
+        // Cursor is within this segment
+        const offsetInSegment = this.currentCol - segStart;
+        const beforeCursor = segment.text.slice(0, offsetInSegment);
+        const afterCursor = segment.text.slice(offsetInSegment);
+
+        if (beforeCursor) {
+          lineEl.appendChild(this.createStyledSpan(beforeCursor, segment.style));
+        }
+        lineEl.appendChild(this.cursorElement);
+        cursorInserted = true;
+        if (afterCursor) {
+          lineEl.appendChild(this.createStyledSpan(afterCursor, segment.style));
+        }
+      } else {
+        lineEl.appendChild(this.createStyledSpan(segment.text, segment.style));
+      }
+
+      charPos += segment.text.length;
+    }
+
+    // Cursor at end of line
+    if (!cursorInserted) {
+      lineEl.appendChild(this.cursorElement);
+    }
   }
 
   /**
