@@ -17,8 +17,6 @@
  * - Violations are recorded even in audit mode
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
 import { type BlockedGlobal, getBlockedGlobals } from "./blocked-globals.js";
 import type {
   DefenseInDepthConfig,
@@ -35,6 +33,49 @@ import type {
  */
 declare const __BROWSER__: boolean | undefined;
 const IS_BROWSER = typeof __BROWSER__ !== "undefined" && __BROWSER__;
+
+/**
+ * Generate a random UUID. Works in both Node.js and browsers.
+ */
+function generateUUID(): string {
+  // Use Web Crypto API (available in both Node.js 19+ and browsers)
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  // Fallback for older Node.js versions
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+/**
+ * Dynamically import AsyncLocalStorage only in Node.js environments.
+ * This avoids bundler errors in browser builds.
+ */
+type AsyncLocalStorageType<T> = {
+  run<R>(store: T, callback: () => R): R;
+  getStore(): T | undefined;
+};
+
+let AsyncLocalStorageClass: (new <T>() => AsyncLocalStorageType<T>) | null =
+  null;
+
+// Only load AsyncLocalStorage in Node.js (not in browser builds)
+if (!IS_BROWSER) {
+  try {
+    // Use dynamic require to avoid static analysis by bundlers
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const asyncHooks = require("node:async_hooks");
+    AsyncLocalStorageClass = asyncHooks.AsyncLocalStorage;
+  } catch {
+    // AsyncLocalStorage not available (e.g., in some edge runtimes)
+    console.debug(
+      "[DefenseInDepthBox] AsyncLocalStorage not available, defense-in-depth disabled",
+    );
+  }
+}
 
 /**
  * Suffix added to all security violation messages.
@@ -68,9 +109,10 @@ interface DefenseContext {
 
 // AsyncLocalStorage instance to track whether current async context is within bash.exec()
 // Only created in Node.js environments (not in browser builds)
-const executionContext = IS_BROWSER
-  ? null
-  : new AsyncLocalStorage<DefenseContext>();
+const executionContext: AsyncLocalStorageType<DefenseContext> | null =
+  !IS_BROWSER && AsyncLocalStorageClass
+    ? new AsyncLocalStorageClass<DefenseContext>()
+    : null;
 
 // Maximum number of violations to store (prevent memory issues)
 const MAX_STORED_VIOLATIONS = 1000;
@@ -192,7 +234,7 @@ export class DefenseInDepthBox {
     // Also disabled when config.enabled is false
     if (IS_BROWSER || !this.config.enabled) {
       // Return a no-op handle
-      const executionId = randomUUID();
+      const executionId = generateUUID();
       return {
         run: <T>(fn: () => Promise<T>): Promise<T> => fn(),
         deactivate: () => {},
@@ -206,7 +248,7 @@ export class DefenseInDepthBox {
       this.activationTime = Date.now();
     }
 
-    const executionId = randomUUID();
+    const executionId = generateUUID();
 
     return {
       run: <T>(fn: () => Promise<T>): Promise<T> => {
