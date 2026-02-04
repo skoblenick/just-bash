@@ -15,8 +15,8 @@ importers:
         specifier: ^6.0.66
         version: 6.0.66(zod@4.3.6)
       bash-tool:
-        specifier: ^1.3.11
-        version: 1.3.11(ai@6.0.66(zod@4.3.6))(just-bash@2.7.0)
+        specifier: ^1.3.12
+        version: 1.3.12(ai@6.0.66(zod@4.3.6))(just-bash@2.7.0)
       geist:
         specifier: ^1.5.1
         version: 1.5.1(next@16.1.6(@babel/core@7.29.0)(@opentelemetry/api@1.9.0)(react-dom@19.2.3(react@19.2.3))(react@19.2.3))
@@ -867,13 +867,13 @@ packages:
     resolution: {integrity: sha512-ipDqC8FrAl/76p2SSWKSI+H9tFwm7vYqXQrItCuiVPt26Km0jS+NzSsBWAaBusvSbQcfJG+JitdMm+wZAgTYqg==}
     hasBin: true
 
-  bash-tool@1.3.11:
-    resolution: {integrity: sha512-V7nHdHDZ42RSeNsa/4Pi0Y5MlgtqElOyurp+oCaE104iOD21lzd7gSwKrKVdcKFhH32nfqypu1mg0Poz7JPyiQ==}
+  bash-tool@1.3.12:
+    resolution: {integrity: sha512-ZpuBCEVuZ7u1YRAx2GythBwzMxY6prVJygcGP4Ju/pzGoGzjFTlUGS57vqjW47P5ma1rM6FRAX4jiOUwqdUgNg==}
     engines: {node: '>=18'}
     peerDependencies:
       '@vercel/sandbox': '*'
       ai: ^6.0.0
-      just-bash: ^2.7.1
+      just-bash: ^2.8.0
     peerDependenciesMeta:
       '@vercel/sandbox':
         optional: true
@@ -3054,7 +3054,7 @@ snapshots:
 
   baseline-browser-mapping@2.9.19: {}
 
-  bash-tool@1.3.11(ai@6.0.66(zod@4.3.6))(just-bash@2.7.0):
+  bash-tool@1.3.12(ai@6.0.66(zod@4.3.6))(just-bash@2.7.0):
     dependencies:
       ai: 6.0.66(zod@4.3.6)
       fast-glob: 3.3.3
